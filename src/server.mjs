@@ -21,6 +21,25 @@ const target = {
   instance_id: z.string().optional().describe('官方 list_instances 返回的 instance_id，与 project_path 二选一。'),
 };
 
+class Seen {
+  constructor(code, source) {
+    this.code = code;
+    this.source = source;
+    this.map = new Map();
+  }
+
+  keep({ raw, ...page }) {
+    page.items.forEach((slim, i) => this.map.set(slim.template_id, { slim, raw: raw[i] }));
+    return page;
+  }
+
+  get(id) {
+    const hit = this.map.get(String(id));
+    if (!hit) throw Error(`${this.code}: ${id}; call ${this.source} first`);
+    return hit;
+  }
+}
+
 const text = (value) => ({ content: [{ type: 'text', text: JSON.stringify(value, null, 2) }] });
 const failure = (error) => ({ content: [{ type: 'text', text: String(error?.message ?? error) }], isError: true });
 
@@ -51,12 +70,23 @@ export function createServer(deps = {}) {
   d.official.onToolsChanged = () => server.sendToolListChanged().catch(() => {});
   const projects = new Projects(d);
   d.downloads = d.downloads ?? new Downloads();
+  // Library assets and homepage works seen in this session, kept here rather than in a window:
+  // windows open and close while an agent works, and a later apply or download may be served by a
+  // different one. The plugin returns raw records next to the slim items; clients only see the slim ones.
+  const seenLib = new Seen('UNKNOWN_TEMPLATE', 'library_list or library_search');
+  const seenWorks = new Seen('UNKNOWN_WORK', 'works_list or works_search');
 
   // Forwards to the plugin window showing the target project.
   const plugin = (method, timeoutMs) => async (args) => {
     const { project_path, instance_id, ...params } = args;
     const projectPath = await projects.resolveProjectPath({ project_path, instance_id });
     return text(await d.callPlugin(method, params, { projectPath, timeoutMs }));
+  };
+
+  const library = (method) => async (args) => {
+    const { project_path, instance_id, ...params } = args;
+    const projectPath = await projects.resolveProjectPath({ project_path, instance_id });
+    return text(seenLib.keep(await d.callPlugin(method, params, { projectPath })));
   };
 
   // Homepage works do not depend on the project, so any window serves them (the lowest pid when no
@@ -67,26 +97,16 @@ export function createServer(deps = {}) {
     if (!pids.length) throw Error('NO_EDITOR_WINDOW: open any project window first (works are served by the XiangsuMcpExt plugin inside it)');
     return { pid: pids[0] };
   };
-  // Works seen in this session, kept here rather than in a window: windows open and close while an
-  // agent works, and a later download may be served by a different one.
-  const seenWorks = new Map();
   const works = (method) => async (args) => {
     const { project_path, instance_id, ...params } = args;
-    const { raw, ...page } = await d.callPlugin(method, params, await homeWindow({ project_path, instance_id }));
-    page.items.forEach((slim, i) => seenWorks.set(slim.template_id, { slim, raw: raw[i] }));
-    return text(page);
-  };
-  const seenWork = (template_id) => {
-    const w = seenWorks.get(String(template_id));
-    if (!w) throw Error(`UNKNOWN_WORK: ${template_id}; call works_list or works_search first`);
-    return w;
+    return text(seenWorks.keep(await d.callPlugin(method, params, await homeWindow({ project_path, instance_id }))));
   };
   const openPaths = async () => (await projects.windows()).map((w) => w.project_path).filter(Boolean);
   // Every works download first sweeps out earlier ones past their lifetime.
   const pruneDownloads = async () => d.downloads.cleanup({ olderThanMs: DOWNLOAD_TTL_MS, openPaths: await openPaths() });
   const downloadWork = async (args) => {
     const { project_path, instance_id, template_id } = args;
-    const { raw } = seenWork(template_id);
+    const { raw } = seenWorks.get(template_id);
     await pruneDownloads();
     const got = await d.callPlugin('works_download', { item: raw }, { ...(await homeWindow({ project_path, instance_id })), timeoutMs: 600000 });
     const root = editorRoot(got.project_path);
@@ -155,24 +175,22 @@ export function createServer(deps = {}) {
         cursor: z.number().int().min(0).optional().describe('翻页游标，取上一页的 next_cursor。'),
         count: z.number().int().min(1).max(100).optional().describe('每页数量，默认 30。'),
       },
-      run: plugin('library_list'),
+      run: library('library_list'),
     },
     {
       name: 'library_search',
       description: '按关键词搜索官方素材库，逐个面板查询以拿全结果（美妆、滤镜、脸部变形、AI 实时变脸、贴纸、画面特效、音效等），返回 template_id、title、panel_key。',
       shape: { ...target, query: z.string().min(1).describe('搜索关键词，如「芒果脸」「小屁桃」「腮红」。') },
-      run: plugin('library_search'),
+      run: library('library_search'),
     },
     {
       name: 'library_preview',
       description: '查看官方素材的封面图，用于按画面挑选。一次最多 8 个，template_id 须来自本会话的 library_list / library_search。单个封面失败只在该项写明原因。',
-      shape: { ...target, template_ids: z.array(z.string()).min(1).max(8).describe('要看封面的 template_id。') },
-      run: async (a) => {
-        const { project_path, instance_id, template_ids } = a;
-        const projectPath = await projects.resolveProjectPath({ project_path, instance_id });
-        const covers = await d.callPlugin('library_covers', { template_ids }, { projectPath });
+      shape: { template_ids: z.array(z.string()).min(1).max(8).describe('要看封面的 template_id。') },
+      run: async ({ template_ids }) => {
+        const rows = template_ids.map((id) => seenLib.get(id).slim);
         const content = [];
-        for (const c of covers) {
+        for (const c of rows) {
           content.push({ type: 'text', text: `${c.title}（template_id ${c.template_id}）` });
           content.push(c.cover_url ? await imageContent(d, { url: c.cover_url }) : { type: 'text', text: '无封面图' });
         }
@@ -188,7 +206,12 @@ export function createServer(deps = {}) {
         template_id: z.string().describe('library_list / library_search 返回的 template_id。'),
         auto_instantiate: z.boolean().optional().describe('是否放进场景，默认 true；false 时只导入资源面板。'),
       },
-      run: plugin('library_apply', 180000),
+      run: async (a) => {
+        const { project_path, instance_id, template_id, auto_instantiate } = a;
+        const projectPath = await projects.resolveProjectPath({ project_path, instance_id });
+        const params = { item: seenLib.get(template_id).raw, ...(auto_instantiate === undefined ? {} : { auto_instantiate }) };
+        return text(await d.callPlugin('library_apply', params, { projectPath, timeoutMs: 180000 }));
+      },
     },
     {
       name: 'works_nav',
@@ -216,7 +239,7 @@ export function createServer(deps = {}) {
         animated: z.boolean().optional().describe('看动图（gif）而不是静态封面，默认 false；动图较大。'),
       },
       run: async ({ template_ids, animated = false }) => {
-        const rows = template_ids.map((id) => seenWork(id).slim);
+        const rows = template_ids.map((id) => seenWorks.get(id).slim);
         const content = [];
         for (const r of rows) {
           const url = (animated && r.gif_url) || r.cover_url || r.gif_url;

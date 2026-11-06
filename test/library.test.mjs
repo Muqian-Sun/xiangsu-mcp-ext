@@ -152,16 +152,20 @@ test('search queries each searchable applicable panel on its own, dedupes and dr
   await assert.rejects(lib.search({ query: '  ' }), /INVALID_QUERY/);
 });
 
-test('apply requires a template seen in list/search', async () => {
+test('apply takes the raw record from list/search', async () => {
   const { lib, calls } = setup();
-  await assert.rejects(lib.apply({ template_id: '111' }), /UNKNOWN_TEMPLATE/);
+  await assert.rejects(lib.apply({}), /INVALID_TEMPLATE/);
+  await assert.rejects(lib.apply({ item: { title: 'x' } }), /INVALID_TEMPLATE/);
   assert.equal(calls.download, 0);
+  const out = await lib.list({ panel_key: '3d_distortion' });
+  assert.deepEqual(out.raw.map((r) => r.templateId), ['111']);
+  assert.ok(out.raw[0].businessExtra.fileMap.f.url);
 });
 
 test('apply downloads, verifies and imports through AssetPackageManager', async () => {
   const { lib, calls, shared } = setup();
-  await lib.list({ panel_key: '3d_distortion' });
-  const out = await lib.apply({ template_id: '111' });
+  const { raw } = await lib.list({ panel_key: '3d_distortion' });
+  const out = await lib.apply({ item: raw[0] });
   const pkg = path.join(shared, 'LokiDownload', 'assets', '111.ehpackage');
   assert.equal(out.package_path, pkg);
   assert.equal(out.package_cached, false);
@@ -181,7 +185,7 @@ test('apply downloads, verifies and imports through AssetPackageManager', async 
   assert.deepEqual(out.added_objects, [{ name: '芒果脸', object_path: '面部拉伸/芒果脸' }]);
   assert.deepEqual(out.package_folders, []);
 
-  const again = await lib.apply({ template_id: '111', auto_instantiate: false });
+  const again = await lib.apply({ item: raw[0], auto_instantiate: false });
   assert.equal(again.package_cached, true);
   assert.equal(calls.download, 1);
   assert.equal(calls.import[1].autoInstantiate, false);
@@ -191,8 +195,7 @@ test('apply downloads, verifies and imports through AssetPackageManager', async 
 
 test('apply rejects a package whose md5 does not match and never imports it', async () => {
   const { lib, calls, shared } = setup({ downloadBytes: Buffer.from('tampered') });
-  await lib.list({ panel_key: '3d_distortion' });
-  await assert.rejects(lib.apply({ template_id: '111' }), /MD5_MISMATCH/);
+  await assert.rejects(lib.apply({ item: item('111', '芒果脸', '3d_distortion') }), /MD5_MISMATCH/);
   assert.equal(calls.import.length, 0);
   const dir = path.join(shared, 'LokiDownload', 'assets');
   assert.deepEqual(fs.readdirSync(dir), []);
@@ -200,19 +203,18 @@ test('apply rejects a package whose md5 does not match and never imports it', as
 
 test('apply reports import errors and still closes undo and preview locks', async () => {
   const { lib, calls } = setup({ importResult: { result: null, errorCode: 7 } });
-  await lib.list({ panel_key: '3d_distortion' });
-  await assert.rejects(lib.apply({ template_id: '111' }), /IMPORT_FAILED: template 111 errorCode=7/);
+  const it = item('111', '芒果脸', '3d_distortion');
+  await assert.rejects(lib.apply({ item: it }), /IMPORT_FAILED: template 111 errorCode=7/);
   assert.deepEqual(calls.undo.at(-1), 'end');
   assert.deepEqual(calls.lock.at(-1), 'unlock:ImportAssetFromAssetLibrary');
   assert.equal(calls.reload, 0);
   // the busy flag must be released after a failure
-  await assert.rejects(lib.apply({ template_id: '111' }), /IMPORT_FAILED/);
+  await assert.rejects(lib.apply({ item: it }), /IMPORT_FAILED/);
 });
 
 test('apply refuses without an active project', async () => {
   const { lib, calls } = setup({ active: false });
-  await lib.list({ panel_key: '3d_distortion' });
-  await assert.rejects(lib.apply({ template_id: '111' }), /NO_ACTIVE_PROJECT/);
+  await assert.rejects(lib.apply({ item: item('111', '芒果脸', '3d_distortion') }), /NO_ACTIVE_PROJECT/);
   assert.equal(calls.download, 0);
 });
 
@@ -241,7 +243,7 @@ test('self check names the missing internal and asset calls refuse to run', asyn
   assert.throws(() => lib.nav(), /INCOMPATIBLE_EDITOR: missing .*downloadLokiFile/);
   await assert.rejects(lib.list({ panel_key: '3d_distortion' }), /INCOMPATIBLE_EDITOR/);
   await assert.rejects(lib.search({ query: 'x' }), /INCOMPATIBLE_EDITOR/);
-  await assert.rejects(lib.apply({ template_id: '111' }), /INCOMPATIBLE_EDITOR/);
+  await assert.rejects(lib.apply({ item: item('111', '芒果脸', '3d_distortion') }), /INCOMPATIBLE_EDITOR/);
 });
 
 test('self check reports a module that is gone entirely', () => {
@@ -250,13 +252,4 @@ test('self check reports a module that is gone entirely', () => {
   const check = lib.selfCheck('assets');
   assert.equal(check.ok, false);
   assert.match(check.missing.join('\n'), /Common\/Scene :: SceneModule.getEditingSceneService \(MODULE_NOT_FOUND/);
-});
-
-test('covers returns cover urls for known templates and validates input', async () => {
-  const { lib } = setup();
-  assert.throws(() => lib.covers({ template_ids: ['111'] }), /UNKNOWN_TEMPLATE: 111/);
-  await lib.list({ panel_key: '3d_distortion' });
-  assert.deepEqual(lib.covers({ template_ids: ['111'] }), [{ template_id: '111', title: '芒果脸', cover_url: 'https://cdn/111.png' }]);
-  assert.throws(() => lib.covers({ template_ids: [] }), /INVALID_TEMPLATE_IDS/);
-  assert.throws(() => lib.covers({ template_ids: Array(9).fill('111') }), /INVALID_TEMPLATE_IDS/);
 });

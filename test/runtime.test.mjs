@@ -13,7 +13,7 @@ const LIBRARY = require.resolve('../editor-plugin/library.cjs');
 test('library methods dispatch through the METHODS table and dev methods stay off', () => {
   const rt = new Runtime({ devEval: false });
   assert.equal(typeof rt.resolve('library_apply'), 'function');
-  assert.equal(typeof rt.resolve('library_covers'), 'function');
+  assert.equal(rt.resolve('library_covers'), null);
   assert.equal(typeof rt.resolve('self_check'), 'function');
   for (const m of ['menu_preview', 'object_remove', 'resource_delete_unused', 'project_launch', 'project_close', 'project_state']) assert.equal(typeof rt.resolve(m), 'function', m);
   assert.equal(rt.resolve('eval'), null);

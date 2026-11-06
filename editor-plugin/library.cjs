@@ -34,7 +34,6 @@ module.exports = {
   M: common.M,
   slim: assets.slim,
   REQUIRED: assets.REQUIRED,
-  MAX_PREVIEW: assets.MAX_PREVIEW,
   MENU_DENY: menu.MENU_DENY,
   WORK_SORTS: works.SORT,
   CONFIG_PATH: dev.CONFIG_PATH,
