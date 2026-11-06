@@ -7,7 +7,7 @@ import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
 const NAME = 'XiangsuMcpExt';
-const VERSION = '0.2.0';
+const VERSION = '0.3.0';
 const repo = fileURLToPath(new URL('..', import.meta.url));
 const appRoot = process.env.XIANGSU_APP ?? '/Applications/Douyin AR.app';
 const editorVersion = execFileSync('plutil', ['-extract', 'CFBundleShortVersionString', 'raw', path.join(appRoot, 'Contents/Info.plist')], { encoding: 'utf8' }).trim();

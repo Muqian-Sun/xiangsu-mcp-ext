@@ -9,7 +9,7 @@ export const OFFICIAL_URL = process.env.XIANGSU_MCP_URL ?? 'http://127.0.0.1:173
 const CALL_TIMEOUT_MS = 15 * 60 * 1000;
 
 async function defaultConnect(url) {
-  const client = new Client({ name: 'xiangsu-mcp-ext', version: '0.2.0' });
+  const client = new Client({ name: 'xiangsu-mcp-ext', version: '0.3.0' });
   await client.connect(new StreamableHTTPClientTransport(new URL(url)));
   return client;
 }
