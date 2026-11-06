@@ -48,8 +48,55 @@ const REQUIRED = {
     [M.worksDownload, 'DownloadTemplateModel.prototype.startDownload'],
     [M.worksDownload, 'DownloadTemplateModel.prototype.getTemplateProjectPath'],
   ],
+  icon: [
+    [M.iconPreview, 'iconTypeToProjectIconPathMap'],
+    [M.iconPreview, 'IconPreviewManager.getInstance'],
+    [M.iconPreview, 'IconPreviewManager.prototype.importAndCreateIcon'],
+    [M.iconPreview, 'IconPreviewManager.prototype.setIconExistState'],
+    [M.iconPreview, 'IconPreviewManager.prototype.saveIconJson'],
+    [M.iconPreview, 'IconPreviewManager.prototype.isIconCreated'],
+    [M.iconPreview, 'IconPreviewManager.prototype.deleteIcon'],
+    [M.iconPreview, 'IconPreviewManager.prototype.uploadDeleteIcon'],
+    [M.iconWindow, 'showIconCreationWindow'],
+  ],
+  check: [
+    [M.orionui, 'ExtensionManager.host.getAPI'],
+    [M.submission, 'EffectSubmissionAPIKey'],
+    [M.perfTest, 'PerfTestAPIKey'],
+    [M.events, 'BusinessEventManager.TypeGuard'],
+    [M.login, 'loginContribution.getLoginStatus'],
+    [M.remoteAssets, 'RemoteAssetManager.getInstance'],
+    [M.ef, 'Resource.EditorFoundation.env.getInstancePath'],
+  ],
+  submit: [
+    [M.events, 'BusinessEventManager.TypeGuard'],
+    [M.ef, 'EventManager_deprecated.TypeGuard'],
+  ],
+  mobile: [
+    [M.mobilePreview, 'getCookie'],
+    [M.mobilePreview, 'requestMobilePreviewURL'],
+    [M.bizUtils, 'ExportEffectPackageUtils.registerSDKVersionMapping'],
+    [M.remoteAssets, 'RemoteAssetManager.getInstance'],
+  ],
+  community: [
+    [M.urls, 'Domain.kBackendApiURL'],
+    [M.urls, 'DomainPath.kActivityAPI'],
+    [M.urls, 'DomainPath.kTaskListAPI'],
+    [M.bizUtils, 'PlatformUtils.genSignData'],
+    [M.bizUtils, 'UserAgentUtils.userAgentGenerator'],
+    [M.orionui, 'CookieManager'],
+    [M.activityTypes, 'getTypeName'],
+    [M.inspiration, 'getInspirationDetail'],
+    [M.inspirationBridge, 'markAgentInspirationUsed'],
+  ],
+  music: [
+    [M.musicCategory, 'MusicCategoryModel.prototype.updateCategoryList'],
+    [M.musicCategory, 'MusicCategoryModel.prototype.setSelectedCategory'],
+    [M.musicList, 'MusicListModel.prototype.getNextMusicListForDouyin'],
+    [M.musicList, 'MusicListModel.prototype.getNextSearchMusicListForDouyin'],
+    [M.musicSquare, 'MusicSquareManager.instance.setDouyinMusicInfo'],
+  ],
 };
-const MAX_PREVIEW = 8;
 
 // Only plain asset lists can be applied; AI generation panels (妆容/图片/视频/实时变脸 UGC) cost quota
 // and use a different flow, so they are not exposed.
@@ -73,7 +120,6 @@ function slim(item) {
 class Library {
   constructor(mod) {
     this.mod = mod;
-    this.items = new Map();
     this.applying = false;
   }
 
@@ -106,21 +152,11 @@ class Library {
     if (!ok) throw Error(`INCOMPATIBLE_EDITOR: missing ${missing.join('; ')}`);
   }
 
-  covers({ template_ids }) {
-    if (!Array.isArray(template_ids) || !template_ids.length || template_ids.length > MAX_PREVIEW) {
-      throw Error(`INVALID_TEMPLATE_IDS: pass 1-${MAX_PREVIEW} template ids`);
-    }
-    return template_ids.map((id) => {
-      const it = this.items.get(String(id));
-      if (!it) throw Error(`UNKNOWN_TEMPLATE: ${id}; call library_list or library_search first`);
-      const s = slim(it);
-      return { template_id: s.template_id, title: s.title, cover_url: s.cover_url };
-    });
-  }
-
-  remember(items) {
-    for (const it of items) if (it && it.templateId) this.items.set(String(it.templateId), it);
-    return items.map(slim);
+  // Windows open and close while an agent works, so the plugin keeps no library state: the raw
+  // records go back with the slim items and the MCP server hands one back to library_apply.
+  page(items) {
+    const raw = items.filter((it) => it && it.templateId);
+    return { items: raw.map(slim), raw };
   }
 
   navEntries() {
@@ -156,7 +192,7 @@ class Library {
     const data = body(await this.mod(M.list).getAssetList({ cursor, count, categoryIds: JSON.stringify([catId]) }), 'GET_ASSET_LIST');
     const info = data.dataInfos || {};
     const raw = (info.template || []).map((t) => ({ ...t, panelKey: t.panelKey || panel_key }));
-    return { panel_key, categories, category_id: catId, items: this.remember(raw), next_cursor: info.cursor ?? null, has_more: !!info.hasNext };
+    return { panel_key, categories, category_id: catId, ...this.page(raw), next_cursor: info.cursor ?? null, has_more: !!info.hasNext };
   }
 
   // The search API returns only ~5 items per request when several panels are combined, and ignores
@@ -181,7 +217,7 @@ class Library {
       if (!it || !it.templateId || !allowed.has(it.panelKey)) continue;
       if (!seen.has(String(it.templateId))) seen.set(String(it.templateId), it);
     }
-    return { query: q, items: this.remember([...seen.values()]) };
+    return { query: q, ...this.page([...seen.values()]) };
   }
 
   async download(item) {
@@ -205,10 +241,10 @@ class Library {
     return { pkg, cached: false };
   }
 
-  async apply({ template_id, auto_instantiate = true }) {
+  // `item` is a raw record from library_list / library_search.
+  async apply({ item, auto_instantiate = true }) {
     this.ensureCompatible();
-    const item = this.items.get(String(template_id));
-    if (!item) throw Error(`UNKNOWN_TEMPLATE: ${template_id}; call library_list or library_search first`);
+    if (!item || !item.templateId) throw Error('INVALID_TEMPLATE: pass the raw record returned by library_list / library_search');
     const { EF, sceneEditor, project } = editingScene(this);
     if (this.applying) throw Error('APPLY_IN_PROGRESS');
     this.applying = true;
@@ -261,8 +297,7 @@ const METHODS = {
   library_nav: 'nav',
   library_list: 'list',
   library_search: 'search',
-  library_covers: 'covers',
   library_apply: 'apply',
 };
 
-module.exports = { Library, slim, REQUIRED, MAX_PREVIEW, METHODS };
+module.exports = { Library, slim, REQUIRED, METHODS };

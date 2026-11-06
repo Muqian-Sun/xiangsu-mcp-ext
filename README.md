@@ -8,6 +8,8 @@
 - 官方素材库：浏览、搜索、看封面、应用（脸部变形、美型、AI 实时变脸、美妆、滤镜、贴纸、画面特效等），流程与素材库面板相同。
 - 「添加对象」菜单：工具栏美妆 / 美型 / AI 实时变脸里的全部官方功能项（美容、面部生成、表情生成、性别年龄、五官处理、身体换装等），可看示意图后按菜单项 ID 添加。
 - 首页作品：浏览、搜索、看封面，下载完整工程到本地或直接在编辑器里打开（官方工程和已发布的作品），供 agent 读取场景、脚本和资源，学习别人的做法；下载的东西都有登记，用完即删，最长保留 24 小时。
+- 交付：设置图标、特效检测（本地 + 云端）、打开提交窗口（发布由你在窗口里确认）、手机预览二维码、浏览任务并绑定已领取的任务或创作灵感。
+- 抖音音乐：按分类或关键词找歌，设为特效音乐。
 - 塑型画笔（FaceWarpX）强度：官方能读不能写，这里按检查器滑块的方式改。
 - 工程窗口：新建空白工程（首次保存到指定目录）、打开、关闭。
 - 干净删除：删除对象时找出只被它使用的资源和它导入时带进来的素材包文件夹，确认后删除。
@@ -39,6 +41,13 @@
 | `works_download` | 下载并解压完整工程（与首页点开作品同一流程，但不开窗口），返回工程目录和文件清单；`dest` 给定时把工程放到该目录 |
 | `works_open` | 下载并在新窗口里按首页的方式打开（不弹版本升级提示，工程处于未保存状态），返回 pid 和 instance_id |
 | `works_cleanup` | 删除下载过的作品（含 `dest`）；编辑器窗口开着的保留，其它路径一律拒绝 |
+| `icon_set` / `icon_open` | 把一张图片裁成 360×360 PNG 设为工程图标（默认女性、男性两版，提交窗口要这两个）；或打开「图标制作」窗口 |
+| `effect_check` | 本地检查包体上限、是否原样套用模板、登录、图标；`cloud=true` 再跑「特效检测」云端性能检测（会上传特效包做测试） |
+| `submit_prepare` | 本地检查通过后走「提交特效」按钮的入口，只打开提交窗口；上传发布只在你点确认时发生 |
+| `mobile_preview` | 按手机预览方式打包上传到抖音预览服务，返回和编辑器一样的二维码（7 天有效），抖音 App 扫码真机看 |
+| `tasks_list` / `task_bind` | 活动和特效任务列表；已领取的任务按任务详情页「去创作」的方式重开工程绑定（领取要在 App 里做） |
+| `inspiration_detail` / `inspiration_bind` | 按 ID 看创作灵感，绑定到当前工程 |
+| `music_categories` / `music_list` / `music_apply` | 抖音音乐分类、搜索（带版权标记），按音乐库「使用」套用，可截取片段 |
 | `menu_list` / `menu_preview` / `menu_add` | 「添加对象」菜单项列表、说明和示意图、按菜单项添加（可撤销）；云端 AI 生成项不暴露 |
 | `face_warp_list` / `face_warp_set_intensity` | 列出塑型画笔、改强度（保留笔刷数据，可撤销） |
 | `object_remove` | 删除对象（可撤销），报告只被它使用的资源和它导入时带来的素材包文件夹；`delete_unused_resources=true` 时一并删除 |
@@ -49,6 +58,7 @@
 - 套用官方素材：`library_search` → `library_preview` → `library_apply` → `capture_preview` → `save_project`。
 - 读别人的工程：`works_search`（或 `works_list`）→ `works_preview` → `works_download` → 按返回的 `outline.files` 读 `effect.dyehpj`、`Assets/` 下的场景和 `Graph/` 下的脚本 → `works_cleanup`。
 - 在编辑器里看别人的效果：`works_open` → `get_scene` / `capture_preview` → `project_close`（`discard_changes=true`）→ `works_cleanup`。
+- 交付：`icon_set` → `effect_check`（可加 `cloud=true`）→ `mobile_preview` 真机看 → `save_project` → `submit_prepare`，在提交窗口里填名称并确认发布。要参加任务的，先 `tasks_list` → `task_bind`。
 
 几点约定：
 
@@ -102,7 +112,7 @@ node scripts/install.mjs   # 装到 ~/Library/Application Support/DouyinAR/Plugi
 ## 开发
 
 - `npm test`：用模拟的编辑器模块测插件逻辑；用内存传输测 MCP 工具、官方转发、工程窗口编排。
-- `node scripts/mcp-call.mjs <tool> '<json>' [...]`：新起一个服务按顺序调工具，图片落盘到临时目录。
+- `node scripts/mcp-call.mjs <tool> '<json>' [...]`：新起一个服务按顺序调工具，图片写到 `<临时目录>/xs-mcp-call/`（每次运行先清空）。
 - `node scripts/call.mjs <method> '<json>' [--pid N]`：直调插件。
 - `node scripts/e2e.mjs <工程路径> <关键词> [标题]`：搜索 + 应用 + 未知 ID 报错的端到端检查（会真的导入素材，只对测试工程用）。
 - `config.local.json` 里 `devEval: true` 时可用插件方法 `dev_eval` 在编辑器进程里执行探测代码（`scripts/call.mjs dev_eval '{}' --code-file x.js`，`scripts/dump-source.js` 可导出模块源码）。开关每次调用时读取，改回 `false` 立即失效。**日常使用保持 `false`**：它能在编辑器进程里执行任意代码。
@@ -117,6 +127,9 @@ node scripts/install.mjs   # 装到 ~/Library/Application Support/DouyinAR/Plugi
 - 菜单：`@orion/orion-sdk/orionui` 的 `ExtensionManager` / `I18n`，`DynamicMenuConfigInfo`，`SceneOpsService.createEntity`，`HoverTipsMap`
 - 工程窗口：`OpenProjectFromHomeCommand` + `EditSender`，`closeProjectAndBackToHome`
 - 首页作品：`@orion/Business/HomeWindow/TemplatesPanel/Request/{templatesPanel,templatesCategory}`、`.../Model/util.transformTemplate`、`.../Model/DownloadTemplateModel`；打开作品用 `OpenProjectFromHomeCommand` 的 `openTemplate`
+- 交付：`IconCreationNew/controller/IconPreviewManager`、`Submission/SubmissionExtension/EffectSubmissionExtension`（提交接口 `submit()` 只做前置检查并打开提交窗口）、`PerfTest/PerfTestExtension`、`EditWindow/ToolBar/MobilePreview/backendHelper`、`effectExporter.exportEffectPackage`
+- 任务与灵感：`BusinessCommon/UrlConst` 的 `kActivityAPI` / `kTaskListAPI`、`HomeWindow/ActivityCenter/Common/types`、`InspirationDetail/Core/Api/InspirationDetail`、`Agent/AgentInspirationBridge`
+- 音乐：`EditWindow/Inspector/MusicLibrary/{Model/MusicCategoryModel,Model/MusicListModel,Component/MusicListComponent/MusicSquareManager}`
 
 ## 协议与声明
 
@@ -129,6 +142,6 @@ node scripts/install.mjs   # 装到 ~/Library/Application Support/DouyinAR/Plugi
 
 ## English
 
-Unofficial MCP extension for Douyin AR (像塑) on macOS. One stdio MCP server proxies every tool of the editor's official MCP (with automatic reconnects) and adds what the official server cannot do: browse/search/preview/apply official library assets, browse/search/download or open the homepage works (official projects and published effects) as full projects an agent can read and learn from (every download is registered and deleted by works_cleanup or after 24 hours), add any item of the editor's "add object" menu (toolbar makeup / reshape / AI face effects), set FaceWarpX brush intensity, open/create/close project windows, and remove objects together with resources only they used. It works through a small editor plugin that exposes a token-protected RPC on 127.0.0.1 inside each project window. Relies on editor internals (verified on 9.7.2); `ext_status` reports any missing internals. Install with `npm ci && node scripts/install.mjs`, then register `node src/server.mjs` as a stdio MCP server.
+Unofficial MCP extension for Douyin AR (像塑) on macOS. One stdio MCP server proxies every tool of the editor's official MCP (with automatic reconnects) and adds what the official server cannot do: browse/search/preview/apply official library assets, browse/search/download or open the homepage works (official projects and published effects) as full projects an agent can read and learn from (every download is registered and deleted by works_cleanup or after 24 hours), add any item of the editor's "add object" menu (toolbar makeup / reshape / AI face effects), set FaceWarpX brush intensity, prepare delivery (icon, local and cloud effect checks, opening the submit window — publishing stays a user click — phone preview QR codes, binding received creator tasks or inspirations), use Douyin music, open/create/close project windows, and remove objects together with resources only they used. It works through a small editor plugin that exposes a token-protected RPC on 127.0.0.1 inside each project window. Relies on editor internals (verified on 9.7.2); `ext_status` reports any missing internals. Install with `npm ci && node scripts/install.mjs`, then register `node src/server.mjs` as a stdio MCP server.
 
 Licensed under [MIT](LICENSE). Not affiliated with or endorsed by ByteDance / Douyin; all product names and trademarks belong to their owners. The repository contains no editor code or assets. Official assets and homepage works accessed through this tool belong to 像塑 or their creators and are subject to the platform's terms; use downloaded works for learning only, delete them with works_cleanup when done, and do not redistribute them.

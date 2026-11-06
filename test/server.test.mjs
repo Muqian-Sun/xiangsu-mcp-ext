@@ -11,9 +11,14 @@ import { createServer } from '../src/server.mjs';
 import { fetchImage, readImageFile } from '../src/images.mjs';
 
 const OWN = [
+  'effect_check',
   'ext_status',
   'face_warp_list',
   'face_warp_set_intensity',
+  'icon_open',
+  'icon_set',
+  'inspiration_bind',
+  'inspiration_detail',
   'library_apply',
   'library_list',
   'library_nav',
@@ -22,11 +27,18 @@ const OWN = [
   'menu_add',
   'menu_list',
   'menu_preview',
+  'mobile_preview',
+  'music_apply',
+  'music_categories',
+  'music_list',
   'object_remove',
   'project_close',
   'project_new',
   'project_open',
   'resource_delete_unused',
+  'submit_prepare',
+  'task_bind',
+  'tasks_list',
   'works_cleanup',
   'works_download',
   'works_list',
@@ -96,16 +108,24 @@ test('own tools route to the plugin window by project_path or official instance_
   const seen = [];
   const { client } = await connect({
     official: fakeOfficial(),
-    callPlugin: async (method, params, opts) => (seen.push({ method, params, opts }), { ok: method }),
+    callPlugin: async (method, params, opts) => {
+      seen.push({ method, params, opts });
+      if (method === 'library_search') return { query: 'x', items: [{ template_id: '111', title: '芒果脸' }], raw: [{ templateId: '111', title: '芒果脸' }] };
+      return { ok: method };
+    },
   });
+  const unseen = await client.callTool({ name: 'library_apply', arguments: { project_path: '/proj/B', template_id: '111' } });
+  assert.match(unseen.content[0].text, /UNKNOWN_TEMPLATE: 111/);
+  const found = JSON.parse((await client.callTool({ name: 'library_search', arguments: { project_path: '/proj/C', query: 'x' } })).content[0].text);
+  assert.equal(found.raw, undefined);
   const a = await client.callTool({ name: 'library_apply', arguments: { project_path: '/proj/B', template_id: '111' } });
   assert.deepEqual(JSON.parse(a.content[0].text), { ok: 'library_apply' });
-  assert.deepEqual(seen[0], { method: 'library_apply', params: { template_id: '111' }, opts: { projectPath: '/proj/B', timeoutMs: 180000 } });
+  assert.deepEqual(seen[1], { method: 'library_apply', params: { item: { templateId: '111', title: '芒果脸' } }, opts: { projectPath: '/proj/B', timeoutMs: 180000 } });
   await client.callTool({ name: 'face_warp_set_intensity', arguments: { instance_id: '1', object_path: 'a/塑型画笔', intensity: 55 } });
-  assert.deepEqual(seen[1], { method: 'face_warp_set_intensity', params: { object_path: 'a/塑型画笔', intensity: 55 }, opts: { projectPath: '/proj/A', timeoutMs: undefined } });
+  assert.deepEqual(seen[2], { method: 'face_warp_set_intensity', params: { object_path: 'a/塑型画笔', intensity: 55 }, opts: { projectPath: '/proj/A', timeoutMs: undefined } });
   const unknown = await client.callTool({ name: 'menu_list', arguments: { instance_id: '7' } });
   assert.match(unknown.content[0].text, /UNKNOWN_INSTANCE: 7/);
-  assert.equal(seen.length, 2);
+  assert.equal(seen.length, 3);
 });
 
 test('invalid arguments are rejected before reaching the plugin', async () => {
@@ -123,12 +143,16 @@ test('library_preview and menu_preview return a caption and an image per item, i
   const { client } = await connect({
     official: fakeOfficial(),
     callPlugin: async (method) =>
-      method === 'library_covers'
-        ? [
-            { template_id: '1', title: '芒果脸', cover_url: 'https://ok' },
-            { template_id: '2', title: '无图', cover_url: null },
-            { template_id: '3', title: '坏图', cover_url: 'https://bad' },
-          ]
+      method === 'library_search'
+        ? {
+            query: 'x',
+            items: [
+              { template_id: '1', title: '芒果脸', cover_url: 'https://ok' },
+              { template_id: '2', title: '无图', cover_url: null },
+              { template_id: '3', title: '坏图', cover_url: 'https://bad' },
+            ],
+            raw: [{ templateId: '1' }, { templateId: '2' }, { templateId: '3' }],
+          }
         : [
             { menu_id: 'smokey', name: '烟熏妆', description: '一键烟熏妆', image_url: null, image_file: '/hover/smokey.png' },
             { menu_id: 'x', name: '无图项', description: '', image_url: null, image_file: null },
@@ -139,6 +163,7 @@ test('library_preview and menu_preview return a caption and an image per item, i
     },
     readImageFile: async (file) => ({ data: Buffer.from(file).toString('base64'), mimeType: 'image/gif' }),
   });
+  await client.callTool({ name: 'library_search', arguments: { query: 'x' } });
   const lib = await client.callTool({ name: 'library_preview', arguments: { template_ids: ['1', '2', '3'] } });
   assert.deepEqual(lib.content, [
     { type: 'text', text: '芒果脸（template_id 1）' },

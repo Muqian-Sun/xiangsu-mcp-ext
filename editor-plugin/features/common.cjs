@@ -26,7 +26,64 @@ const M = {
   worksCategory: '@orion/Business/HomeWindow/TemplatesPanel/Request/templatesCategory',
   worksUtil: '@orion/Business/HomeWindow/TemplatesPanel/Model/util',
   worksDownload: '@orion/Business/HomeWindow/TemplatesPanel/Model/DownloadTemplateModel',
+  iconPreview: '@orion/Business/IconCreationNew/controller/IconPreviewManager',
+  iconWindow: '@orion/Business/IconCreationNew/IconCreationWindow',
+  submission: '@orion/Business/Submission/SubmissionExtension/EffectSubmissionExtension',
+  perfTest: '@orion/Business/PerfTest/PerfTestExtension',
+  events: '@orion/Business/Event/BusinessEventManager',
+  login: '@orion/Business/Login/LoginContribution',
+  remoteAssets: '@orion/Business/RemoteAsset/RemoteAssetManager',
+  mobilePreview: '@orion/Business/EditWindow/ToolBar/MobilePreview/backendHelper',
+  urls: '@orion/Business/BusinessCommon/UrlConst',
+  bizUtils: '@orion/Business/BusinessCommon/Utils',
+  activityTypes: '@orion/Business/HomeWindow/ActivityCenter/Common/types',
+  inspiration: '@orion/Business/InspirationDetail/Core/Api/InspirationDetail',
+  inspirationBridge: '@orion/Business/Agent/AgentInspirationBridge',
+  musicCategory: '@orion/Business/EditWindow/Inspector/MusicLibrary/Model/MusicCategoryModel',
+  musicList: '@orion/Business/EditWindow/Inspector/MusicLibrary/Model/MusicListModel',
+  musicSquare: '@orion/Business/EditWindow/Inspector/MusicLibrary/Component/MusicListComponent/MusicSquareManager',
 };
+
+// Scratch folder under the editor instance for exports this plugin makes and removes itself.
+function scratchDir(lib, kind) {
+  const base = lib.mod(M.ef).Resource.EditorFoundation.env.getInstancePath();
+  return fs.mkdtempSync(path.join(base, `xiangsu-mcp-ext-${kind}-`));
+}
+
+// Export options of the two flows this plugin mirrors: the submit flow (exportEffectPackageForSubmit)
+// and the toolbar's phone preview (MobilePreviewPopupContent).
+const EXPORT_OPTIONS = {
+  submit: { exportName: 'effect', zip: true, extra: { treeShakeIEJs: true, exportRemoteAssetJson: true } },
+  preview: { exportName: 'effect', zip: true },
+};
+
+// Exports the effect package into a scratch folder; the size rule for remote assets is the submit
+// flow's.
+async function exportEffectPackage(lib, dir, flow = 'submit') {
+  const project = lib.mod(M.ef).ProjectManager.getInstance().getActiveProject();
+  if (!project) throw Error('NO_ACTIVE_PROJECT');
+  const res = await project.effectExporter.exportEffectPackage(project.sceneManager.mainScene, dir, EXPORT_OPTIONS[flow]);
+  const packagePath = res && res.packagePath;
+  if (!packagePath || !fs.existsSync(packagePath)) throw Error(`EXPORT_FAILED: ${JSON.stringify(res && Object.keys(res))}`);
+  let size = fs.statSync(packagePath).size;
+  const remote = lib.mod(M.remoteAssets).RemoteAssetManager.getInstance();
+  if (remote.getUsedRemoteAssets().length > 0) size = remote.getRemoveRemoteAssetsSize(packagePath);
+  return { packagePath, size };
+}
+
+// Resolves with the first `event` payload on an editor event bus, or `onTimeout()` after `ms`.
+function nextEvent(bus, event, ms, onTimeout) {
+  return new Promise((resolve) => {
+    const done = (v) => {
+      clearTimeout(timer);
+      bus.off(event, handler);
+      resolve(v);
+    };
+    const handler = (...args) => done({ args });
+    const timer = setTimeout(() => done(onTimeout()), ms);
+    bus.on(event, handler);
+  });
+}
 
 function body(res, what) {
   const b = res && res.body;
@@ -134,6 +191,9 @@ function resolveByPath(candidates, objectPath, what) {
 
 module.exports = {
   M,
+  scratchDir,
+  exportEffectPackage,
+  nextEvent,
   body,
   sceneObjectPath,
   editingScene,

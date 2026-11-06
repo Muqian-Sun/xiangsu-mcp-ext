@@ -83,6 +83,16 @@ test('open with a template id launches openTemplate and needs an open window', a
   assert.ok(!calls.some((c) => c[0] === 'open'));
 });
 
+test('open with an activity passes it to the launch and never falls back to the app', async () => {
+  const { d, windows, calls } = world();
+  const dir = project();
+  await new Projects(d).open({ path: dir, activity: { activity_id: 'D2' } });
+  assert.deepEqual(calls.find((c) => c[1] === 'project_launch')[2], { operation: 'openLocal', path: dir, activity: { activity_id: 'D2' } });
+  windows.clear();
+  await assert.rejects(new Projects(d).open({ path: project(), activity: { activity_id: 'D2' } }), /NO_EDITOR_WINDOW/);
+  assert.ok(!calls.some((c) => c[0] === 'open'));
+});
+
 test('open returns the window that already shows the project', async () => {
   const { d, windows, calls } = world();
   const dir = project();
