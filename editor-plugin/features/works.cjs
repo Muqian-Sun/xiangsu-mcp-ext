@@ -1,6 +1,7 @@
 'use strict';
 // Homepage works (the home window's template panel: official projects and user-submitted works),
 // browsed and downloaded through the home window's own request and download modules.
+const fs = require('fs');
 const { M, body } = require('./common.cjs');
 
 const PANEL_KEY = 'tool_template';
@@ -103,7 +104,7 @@ const methods = {
     });
   },
 
-  // Downloads the project zip (cached by the editor under LokiDownload/TemplateResources) and unzips a
+  // Downloads the project zip (into the editor's LokiDownload/TemplateResources cache) and unzips a
   // fresh copy into the instance's ProjectCreatedTmp/CreatedFromTemplate, exactly as opening a work
   // from the homepage does; the project itself is not opened.
   async worksDownload({ template_id }) {
@@ -113,16 +114,21 @@ const methods = {
       throw Error(`NO_PACKAGE_FILE: work ${t.templateId} has no downloadable project`);
     }
     const model = new (this.mod(M.worksDownload).DownloadTemplateModel)();
+    const zip = model.getTemplateProjectPath(String(t.templateId));
+    // A zip already cached belongs to the user's own homepage use; one this call downloads is removed
+    // once unzipped (with the partial .tmp a failed download leaves) so nothing lingers.
+    const cached = fs.existsSync(zip);
     let res;
     try {
       res = await model.startDownload({ ...t, templateID: String(t.templateId), name: t.title });
     } finally {
       if (typeof model.destroy === 'function') model.destroy();
+      if (!cached) for (const f of [zip, zip.replace(/\.zip$/, '.tmp')]) fs.rmSync(f, { force: true });
     }
     if (!res || res.status !== 'success' || !res.unzipPath) {
       throw Error(`WORK_DOWNLOAD_FAILED: work ${t.templateId} status=${res && res.status} stage=${(res && res.errorInfo) || ''}`);
     }
-    return { template_id: String(t.templateId), title: t.title, project_path: res.unzipPath, package_path: res.localPath };
+    return { template_id: String(t.templateId), title: t.title, project_path: res.unzipPath, package_cached: cached };
   },
 };
 

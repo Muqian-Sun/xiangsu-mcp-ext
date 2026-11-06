@@ -43,6 +43,7 @@ const REQUIRED = {
     [M.worksCategory, 'apiSearchTemplatesCategory'],
     [M.worksUtil, 'transformTemplate'],
     [M.worksDownload, 'DownloadTemplateModel.prototype.startDownload'],
+    [M.worksDownload, 'DownloadTemplateModel.prototype.getTemplateProjectPath'],
   ],
 };
 const MAX_PREVIEW = 8;

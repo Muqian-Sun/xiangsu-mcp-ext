@@ -12,7 +12,8 @@ const client = new Client({ name: 'mcp-call', version: '0' });
 await client.connect(new StdioClientTransport({ command: process.execPath, args: [fileURLToPath(new URL('../src/server.mjs', import.meta.url))] }));
 let failed = false;
 for (let i = 0; i < args.length; i += 2) {
-  const res = await client.callTool({ name: args[i], arguments: JSON.parse(args[i + 1] ?? '{}') });
+  // Opening windows and downloading works take longer than the SDK's 60 s default.
+  const res = await client.callTool({ name: args[i], arguments: JSON.parse(args[i + 1] ?? '{}') }, undefined, { timeout: 600000 });
   console.log(`--- ${args[i]} ${res.isError ? 'ERROR' : 'ok'}`);
   for (const [j, c] of res.content.entries()) {
     if (c.type === 'image') {

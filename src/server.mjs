@@ -2,6 +2,7 @@
 // stdio MCP server: everything 像塑's official MCP offers (proxied unchanged), plus editor features the
 // official server cannot reach, served by the XiangsuMcpExt editor plugin.
 import fs from 'node:fs';
+import path from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
@@ -12,7 +13,7 @@ import { callPlugin, listInstances } from './bridge.mjs';
 import { OfficialMcp } from './official.mjs';
 import { fetchImage, readImageFile } from './images.mjs';
 import { Projects, openWithApp } from './projects.mjs';
-import { checkTarget, copyProject, outlineProject } from './works.mjs';
+import { DOWNLOAD_TTL_MS, Downloads, checkTarget, copyProject, editorRoot, outlineProject } from './works.mjs';
 
 const VERSION = '0.3.0';
 
@@ -50,6 +51,7 @@ export function createServer(deps = {}) {
   d.official = d.official ?? new OfficialMcp();
   d.official.onToolsChanged = () => server.sendToolListChanged().catch(() => {});
   const projects = new Projects(d);
+  d.downloads = d.downloads ?? new Downloads();
 
   // Forwards to the plugin window showing the target project.
   const plugin = (method, timeoutMs) => async (args) => {
@@ -70,6 +72,18 @@ export function createServer(deps = {}) {
     const { project_path, instance_id, ...params } = args;
     return text(await d.callPlugin(method, params, await homeWindow({ project_path, instance_id })));
   };
+  const openPaths = async () => (await projects.windows()).map((w) => w.project_path).filter(Boolean);
+  // Every works download first sweeps out earlier ones past their lifetime.
+  const pruneDownloads = async () => d.downloads.cleanup({ olderThanMs: DOWNLOAD_TTL_MS, openPaths: await openPaths() });
+  const downloadWork = async (args) => {
+    const { project_path, instance_id, template_id } = args;
+    await pruneDownloads();
+    const got = await d.callPlugin('works_download', { template_id }, { ...(await homeWindow({ project_path, instance_id })), timeoutMs: 600000 });
+    const root = editorRoot(got.project_path);
+    d.downloads.record({ path: root, template_id: got.template_id, title: got.title });
+    return { ...got, root };
+  };
+  const expiresAt = () => new Date(Date.now() + DOWNLOAD_TTL_MS).toISOString();
   const workPage = {
     category_id: z.string().optional().describe('works_nav 返回的分类 ID；省略时用第一个分类（推荐）。'),
     cursor: z.number().int().min(0).optional().describe('翻页游标，取上一页的 next_cursor。'),
@@ -207,18 +221,51 @@ export function createServer(deps = {}) {
     {
       name: 'works_download',
       description:
-        '下载一个首页作品的完整工程并解压（与在首页点开作品同一流程，但不打开窗口），返回工程目录和文件清单（files 列出相对路径和大小，可直接读取 effect.dyehpj、Assets 下的场景、Graph 下的脚本等来学习做法）。dest 给定时把工程复制到该目录（须不存在或为空，跳过 Library 缓存）作为参考副本；要在编辑器里看效果，用 project_open 打开返回的 project_path。作品版权归原作者，只用于学习参考。',
+        '下载一个首页作品的完整工程并解压（与在首页点开作品同一流程，但不打开窗口），返回工程目录和文件清单（files 列出相对路径和大小，可直接读取 effect.dyehpj、Assets 下的场景、Graph 下的脚本等来学习做法）。dest 给定时把工程放到该目录（须不存在或为空，跳过 Library 缓存），像塑临时目录里的那份随即删除。下载的工程（含 dest）都会登记，expires_at（24 小时）后在下次下载时自动删除；学完请立即调用 works_cleanup。要在编辑器里看效果用 works_open。作品版权归原作者，只用于学习参考，不要复制进自己的工程或仓库。',
       shape: {
         ...target,
         template_id: z.string().describe('works_list / works_search 返回的 template_id。'),
-        dest: z.string().optional().describe('参考副本的目标文件夹绝对路径（须不存在或为空）；省略时只留在像塑的临时目录。'),
+        dest: z.string().optional().describe('工程要放到的文件夹绝对路径（须不存在或为空）；省略时留在像塑的临时目录。'),
       },
       run: async (a) => {
-        const { project_path, instance_id, template_id, dest } = a;
+        const { template_id, dest } = a;
         if (dest !== undefined) checkTarget(dest);
-        const got = await d.callPlugin('works_download', { template_id }, { ...(await homeWindow({ project_path, instance_id })), timeoutMs: 600000 });
-        const root = dest ? copyProject(got.project_path, dest) : got.project_path;
-        return text({ template_id: got.template_id, title: got.title, project_path: root, editor_copy: got.project_path, package_path: got.package_path, outline: outlineProject(root) });
+        const got = await downloadWork(a);
+        let root = got.project_path;
+        if (dest !== undefined) {
+          try {
+            root = copyProject(got.project_path, dest);
+          } finally {
+            d.downloads.cleanup({ paths: [got.root] });
+            if (fs.existsSync(dest)) d.downloads.record({ path: path.resolve(dest), template_id, title: got.title });
+          }
+        }
+        return text({ template_id: got.template_id, title: got.title, project_path: root, expires_at: expiresAt(), outline: outlineProject(root) });
+      },
+    },
+    {
+      name: 'works_open',
+      description:
+        '下载一个首页作品并在新的编辑器窗口里打开，与在首页点开作品同一流程（不弹版本升级提示，工程处于未保存状态）。返回窗口 pid、官方 instance_id 和工程目录，之后可用 get_scene、capture_preview 等官方工具观察它的做法。看完用 project_close（discard_changes=true）关窗，再 works_cleanup 删除下载；窗口开着时工程不会被删除。',
+      shape: { ...target, template_id: z.string().describe('works_list / works_search 返回的 template_id。') },
+      run: async (a) => {
+        const got = await downloadWork(a);
+        try {
+          const opened = await projects.open({ path: got.project_path, template_id: got.template_id });
+          return text({ template_id: got.template_id, title: got.title, ...opened, expires_at: expiresAt() });
+        } catch (e) {
+          d.downloads.cleanup({ paths: [got.root], openPaths: await openPaths() });
+          throw e;
+        }
+      },
+    },
+    {
+      name: 'works_cleanup',
+      description: '删除 works_download / works_open 下载过的作品工程（像塑临时目录里的和 dest 副本）。省略 paths 时删除全部；编辑器窗口正开着的会保留并在 kept_open 里列出，关窗后再调用即可。只删登记过的下载，其它路径一律拒绝。',
+      shape: { paths: z.array(z.string().min(1)).min(1).optional().describe('只删这些下载（works_download / works_open 返回的 project_path）；省略时删除全部。') },
+      run: async ({ paths }) => {
+        const out = d.downloads.cleanup({ paths, openPaths: await openPaths() });
+        return text({ ...out, remaining: d.downloads.list().map((e) => e.path) });
       },
     },
     {
@@ -320,5 +367,8 @@ export function createServer(deps = {}) {
 if (process.argv[1] && fileURLToPath(import.meta.url) === fs.realpathSync(process.argv[1])) {
   const official = new OfficialMcp();
   official.watch();
+  // The official-MCP watcher keeps the event loop alive, so a closed client would leave this process
+  // running forever.
+  process.stdin.on('end', () => process.exit(0));
   await createServer({ official }).connect(new StdioServerTransport());
 }

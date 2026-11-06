@@ -1,12 +1,12 @@
 import test from 'node:test';
+import { tmpdir } from './tmp.mjs';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
-process.env.XIANGSU_MCP_EXT_STATE = fs.mkdtempSync(path.join(os.tmpdir(), 'xs-state-'));
+process.env.XIANGSU_MCP_EXT_STATE = tmpdir('xs-state-');
 const { Runtime } = require('../editor-plugin/runtime.cjs');
 const LIBRARY = require.resolve('../editor-plugin/library.cjs');
 

@@ -1,11 +1,11 @@
 import test from 'node:test';
+import { tmpdir } from './tmp.mjs';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 import { Projects } from '../src/projects.mjs';
 
-const tmp = () => fs.mkdtempSync(path.join(os.tmpdir(), 'xs-p-'));
+const tmp = () => tmpdir('xs-p-');
 
 // A fake editor: plugin windows keyed by pid, plus an official MCP mapping pids to instance ids.
 function world() {
@@ -45,7 +45,7 @@ function world() {
         ready.set(opts.pid, n);
         return { scene_ready: n >= readyAfter };
       }
-      if (method === 'project_launch' && params.operation === 'openLocal') windows.set(200, params.path);
+      if (method === 'project_launch' && params.operation !== 'createNew') windows.set(200, params.path);
       if (method === 'project_launch' && params.operation === 'createNew') windows.set(201, '/x/Instances/Instance2/ProjectCreatedTmp/未命名');
       if (method === 'project_close') {
         const p = windows.get(opts.pid);
@@ -70,6 +70,17 @@ test('open asks an existing window to open the project and waits for it', async 
   const out = await new Projects(d).open({ path: dir });
   assert.deepEqual(out, { already_open: false, pid: 200, project_path: dir, instance_id: '2' });
   assert.deepEqual(calls.find((c) => c[1] === 'project_launch').slice(1, 3), ['project_launch', { operation: 'openLocal', path: dir }]);
+});
+
+test('open with a template id launches openTemplate and needs an open window', async () => {
+  const { d, windows, calls } = world();
+  const dir = project();
+  const out = await new Projects(d).open({ path: dir, template_id: '9' });
+  assert.equal(out.pid, 200);
+  assert.deepEqual(calls.find((c) => c[1] === 'project_launch')[2], { operation: 'openTemplate', path: dir, template_id: '9' });
+  windows.clear();
+  await assert.rejects(new Projects(d).open({ path: project(), template_id: '9' }), /NO_EDITOR_WINDOW/);
+  assert.ok(!calls.some((c) => c[0] === 'open'));
 });
 
 test('open returns the window that already shows the project', async () => {

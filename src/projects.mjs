@@ -82,14 +82,18 @@ export class Projects {
     if (!ok) throw Error(`SCENE_NOT_READY: window ${pid} did not finish loading its scene`);
   }
 
-  async open({ path: target }) {
+  // template_id opens the folder the way the homepage opens a work (openTemplate): no version-upgrade
+  // prompt, and the project starts unsaved. That launch goes through a window, so one must be open.
+  async open({ path: target, template_id }) {
     const abs = path.resolve(target);
     if (!fs.existsSync(path.join(abs, 'effect.dyehpj'))) throw Error(`NOT_A_PROJECT: ${abs} has no effect.dyehpj`);
     const windows = await this.windows();
     const already = windows.find((w) => samePath(w.project_path, abs));
     if (already) return { already_open: true, pid: already.pid, project_path: already.project_path, instance_id: await this.instanceIdForPid(already.pid, this.d.instanceTimeoutMs) };
-    if (windows.length) await this.d.callPlugin('project_launch', { operation: 'openLocal', path: abs }, { pid: windows[0].pid });
-    else await this.d.openWithApp(path.join(abs, 'effect.dyehpj'));
+    const launch = template_id === undefined ? { operation: 'openLocal', path: abs } : { operation: 'openTemplate', path: abs, template_id };
+    if (windows.length) await this.d.callPlugin('project_launch', launch, { pid: windows[0].pid });
+    else if (template_id === undefined) await this.d.openWithApp(path.join(abs, 'effect.dyehpj'));
+    else throw Error('NO_EDITOR_WINDOW: open any project window first; works are opened through an open editor window');
     const w = await waitFor(async () => (await this.windows()).find((x) => samePath(x.project_path, abs)), { timeoutMs: this.d.openTimeoutMs, sleep: this.d.sleep });
     if (!w) throw Error(`OPEN_TIMEOUT: ${abs} did not finish opening; 像塑 may be showing a dialog (e.g. version upgrade) that needs a click`);
     await this.waitReady(w.pid);
