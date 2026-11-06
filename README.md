@@ -52,9 +52,9 @@
 
 几点约定：
 
-- `library_apply` 只接受同一工程窗口里 `library_list` / `library_search` 返回过的 `template_id`（窗口重开或扩展代码更新后需重新搜索）；`works_preview` / `works_download` 同理，只接受 `works_list` / `works_search` 返回过的作品。
+- `library_apply` 只接受同一工程窗口里 `library_list` / `library_search` 返回过的 `template_id`（窗口重开或扩展代码更新后需重新搜索）；`works_preview` / `works_download` / `works_open` 只接受本会话里 `works_list` / `works_search` 返回过的作品（记录在 MCP 服务里，不受工程窗口开关影响，重启服务后需重新搜索）。
 - 像塑最多同时开 2 个工程窗口（编辑器的 `CHILD_PROCESS_LIMIT`）。都占满时 `project_open` / `project_new` / `works_open` 直接返回 `WINDOW_LIMIT`，先 `project_close` 一个；不检查的话首页只会弹警告，窗口永远不来。
-- `works_*` 与当前工程无关，不指定工程时固定由 pid 最小的工程窗口处理，保证先列表、后下载落在同一个窗口。
+- `works_*` 与当前工程无关，任意一个工程窗口开着即可；不指定工程时由 pid 最小的窗口处理。
 - `works_download` / `works_open` 走编辑器自己的下载流程，每次解压一份新的到像塑实例目录的 `ProjectCreatedTmp/CreatedFromTemplate/<guid>/` 下。`dest` 副本不含 `Library/` 缓存（编辑器打开时会重建）。
 - 下载物不留痕：
   - 编辑器缓存在 `~/Library/Application Support/DouyinAR/Shared/Resources/LokiDownload/TemplateResources/` 的工程包，解压后立即删除（下载前已存在的视为你自己在首页用过的缓存，不动）。

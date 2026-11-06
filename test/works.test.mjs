@@ -118,6 +118,8 @@ test('works_list defaults to the first category, maps sort to the ranker and sli
   });
   assert.equal(out.items[1].effect_id, null);
   assert.equal(out.items[1].publish_count, null);
+  assert.deepEqual(out.raw.map((t) => t.templateId), ['1', '2']);
+  assert.ok(out.raw[0].businessExtra.fileMap.f.url);
   assert.equal(out.next_cursor, 2);
   assert.equal(out.has_more, true);
   await lib.worksList({ category_id: '40669', sort: 'latest', cursor: 2, count: 5 });
@@ -139,11 +141,11 @@ test('works_search sends the homepage search word within a category', async () =
   await assert.rejects(lib.worksSearch({ query: '  ' }), /INVALID_QUERY/);
 });
 
-test('works_download needs a listed work and passes the editor the fields its unzip step writes', async () => {
+test('works_download takes the raw record and passes the editor the fields its unzip step writes', async () => {
   const { lib, calls, cache } = setup();
-  await assert.rejects(lib.worksDownload({ template_id: '1' }), /UNKNOWN_WORK: 1/);
-  await lib.worksList({});
-  const out = await lib.worksDownload({ template_id: '1' });
+  await assert.rejects(lib.worksDownload({}), /INVALID_WORK/);
+  const { raw } = await lib.worksList({});
+  const out = await lib.worksDownload({ item: raw[0] });
   assert.deepEqual(out, { template_id: '1', title: 'AI 修仙合掌转场', project_path: '/tmp/CreatedFromTemplate/g/未命名', package_cached: false });
   assert.deepEqual(fs.readdirSync(cache), []);
   const sent = calls.download[0];
@@ -152,23 +154,21 @@ test('works_download needs a listed work and passes the editor the fields its un
   assert.equal(sent.name, 'AI 修仙合掌转场');
   assert.ok(sent.businessExtra.fileMap.f.url);
   assert.equal(calls.destroyed, 1);
-  await lib.worksSearch({ query: '合掌' });
-  await assert.rejects(lib.worksDownload({ template_id: '3' }), /NO_PACKAGE_FILE: work 3/);
+  const search = await lib.worksSearch({ query: '合掌' });
+  await assert.rejects(lib.worksDownload({ item: search.raw[0] }), /NO_PACKAGE_FILE: work 3/);
   assert.equal(calls.download.length, 1);
 });
 
 test('works_download surfaces the editor download failure stage and leaves no zip behind', async () => {
   const { lib, calls, cache } = setup({ download: { status: 'fail', unzipPath: '', errorInfo: 'unzip' } });
-  await lib.worksList({});
-  await assert.rejects(lib.worksDownload({ template_id: '1' }), /WORK_DOWNLOAD_FAILED: work 1 status=fail stage=unzip/);
+  await assert.rejects(lib.worksDownload({ item: work('1', 'AI 修仙合掌转场') }), /WORK_DOWNLOAD_FAILED: work 1 status=fail stage=unzip/);
   assert.equal(calls.destroyed, 1);
   assert.deepEqual(fs.readdirSync(cache), []);
 });
 
 test('works_download keeps a zip the user already had cached', async () => {
   const { lib, cache } = setup({ cached: true });
-  await lib.worksList({});
-  assert.equal((await lib.worksDownload({ template_id: '1' })).package_cached, true);
+  assert.equal((await lib.worksDownload({ item: work('1', 'AI 修仙合掌转场') })).package_cached, true);
   assert.ok(fs.existsSync(path.join(cache, '1.zip')));
 });
 
@@ -179,14 +179,6 @@ test('works calls refuse when the homepage modules are missing', async () => {
   assert.deepEqual(check.missing, [`${M.worksCategory} :: apiSearchTemplatesCategory`]);
   await assert.rejects(lib.worksNav(), /INCOMPATIBLE_EDITOR/);
   await assert.rejects(lib.worksList({}), /INCOMPATIBLE_EDITOR/);
-});
-
-test('works_covers returns cover and gif urls for listed works', async () => {
-  const { lib } = setup();
-  assert.throws(() => lib.worksCovers({ template_ids: ['1'] }), /UNKNOWN_WORK/);
-  await lib.worksList({});
-  assert.deepEqual(lib.worksCovers({ template_ids: ['1'] }), [{ template_id: '1', title: 'AI 修仙合掌转场', cover_url: 'https://cdn/1.png', gif_url: 'https://cdn/1.gif' }]);
-  assert.throws(() => lib.worksCovers({ template_ids: Array(9).fill('1') }), /INVALID_TEMPLATE_IDS/);
 });
 
 function fakeProject() {
@@ -239,7 +231,7 @@ test('works tools use the lowest-pid window when no target is given', async () =
   const seen = [];
   const client = await connect({
     listInstances: () => [{ pid: 300 }, { pid: 200 }],
-    callPlugin: async (method, params, opts) => (seen.push({ method, params, opts }), { ok: true }),
+    callPlugin: async (method, params, opts) => (seen.push({ method, params, opts }), { items: [], raw: [] }),
   });
   await client.callTool({ name: 'works_list', arguments: { sort: 'latest' } });
   assert.deepEqual(seen[0], { method: 'works_list', params: { sort: 'latest' }, opts: { pid: 200 } });
@@ -285,6 +277,7 @@ function worksWorld({ open = null } = {}) {
         if (state.launch) state.open = state.launch(params);
         return {};
       }
+      if (method === 'works_search') return { items: [{ template_id: '1', title: 'AI 修仙合掌转场', cover_url: 'https://c/1.png', gif_url: 'https://c/1.gif' }], raw: [{ templateId: '1', title: 'AI 修仙合掌转场' }] };
       if (method === 'works_download') return { template_id: '1', title: 'AI 修仙合掌转场', project_path: dl.project, package_cached: false };
       throw Error(`unexpected ${method}`);
     },
@@ -326,8 +319,9 @@ test('works_download with dest moves the work there and deletes the editor copy 
   const { dl, seen, deps } = worksWorld();
   const dest = path.join(tmpdir('xs-dest-'), 'ref');
   const client = await connect(deps);
+  await client.callTool({ name: 'works_search', arguments: { query: '合掌' } });
   const res = JSON.parse((await client.callTool({ name: 'works_download', arguments: { template_id: '1', dest } })).content[0].text);
-  assert.deepEqual(seen.find((s) => s.method === 'works_download'), { method: 'works_download', params: { template_id: '1' }, opts: { pid: 7, timeoutMs: 600000 } });
+  assert.deepEqual(seen.find((s) => s.method === 'works_download'), { method: 'works_download', params: { item: { templateId: '1', title: 'AI 修仙合掌转场' } }, opts: { pid: 7, timeoutMs: 600000 } });
   assert.equal(res.project_path, dest);
   assert.equal(res.outline.file_count, 4);
   assert.ok(res.expires_at);
@@ -350,6 +344,7 @@ test('a dest taken by someone else during the download is left alone and never r
     return call(method, params, opts);
   };
   const client = await connect(deps);
+  await client.callTool({ name: 'works_search', arguments: { query: '合掌' } });
   const res = await client.callTool({ name: 'works_download', arguments: { template_id: '1', dest } });
   assert.match(res.content[0].text, /TARGET_NOT_EMPTY/);
   assert.deepEqual(fs.readdirSync(dest), ['theirs.txt']);
@@ -374,6 +369,7 @@ test('copyProject removes a half-written copy it created', () => {
 test('works_download without dest records the editor guid folder and works_cleanup removes it', async () => {
   const { dl, deps } = worksWorld();
   const client = await connect(deps);
+  await client.callTool({ name: 'works_search', arguments: { query: '合掌' } });
   const res = JSON.parse((await client.callTool({ name: 'works_download', arguments: { template_id: '1' } })).content[0].text);
   assert.equal(res.project_path, dl.project);
   assert.deepEqual(deps.downloads.list().map((e) => e.path), [dl.guid]);
@@ -390,6 +386,7 @@ test('works downloads past their lifetime are swept by the next download', async
   const reg = new Downloads({ stateDir: path.dirname(deps.downloads.file), now: () => Date.now() - DOWNLOAD_TTL_MS - 1 });
   reg.record({ path: old, template_id: '0' });
   const client = await connect(deps);
+  await client.callTool({ name: 'works_search', arguments: { query: '合掌' } });
   await client.callTool({ name: 'works_download', arguments: { template_id: '1' } });
   assert.equal(fs.existsSync(old), false);
   assert.equal(deps.downloads.list().length, 1);
@@ -399,6 +396,7 @@ test('works_open opens the download as a template and keeps it while the window 
   const { dl, seen, state, deps } = worksWorld();
   state.launch = (p) => p.path;
   const client = await connect(deps);
+  await client.callTool({ name: 'works_search', arguments: { query: '合掌' } });
   const res = JSON.parse((await client.callTool({ name: 'works_open', arguments: { template_id: '1' } })).content[0].text);
   assert.deepEqual(seen.find((s) => s.method === 'project_launch').params, { operation: 'openTemplate', path: dl.project, template_id: '1' });
   assert.equal(res.pid, 8);
@@ -414,6 +412,7 @@ test('works_open opens the download as a template and keeps it while the window 
 test('works_open deletes the download when the window never opens', async () => {
   const { dl, deps } = worksWorld();
   const client = await connect(deps);
+  await client.callTool({ name: 'works_search', arguments: { query: '合掌' } });
   const res = await client.callTool({ name: 'works_open', arguments: { template_id: '1' } });
   assert.match(res.content[0].text, /OPEN_TIMEOUT/);
   assert.equal(fs.existsSync(dl.guid), false);
@@ -442,14 +441,32 @@ test('the stdio server exits when its client closes stdin, even with an official
   assert.equal(code, 0);
 });
 
-test('works_preview shows the gif only when asked', async () => {
+test('works_preview shows the gif only when asked, from works seen in this session', async () => {
   const fetched = [];
-  const client = await connect({
-    listInstances: () => [{ pid: 7 }],
-    callPlugin: async () => [{ template_id: '1', title: 'A', cover_url: 'https://c/1.png', gif_url: 'https://c/1.gif' }],
-    fetchImage: async (url) => (fetched.push(url), { data: 'AAAA', mimeType: 'image/png' }),
-  });
+  const { deps } = worksWorld();
+  const client = await connect({ ...deps, fetchImage: async (url) => (fetched.push(url), { data: 'AAAA', mimeType: 'image/png' }) });
+  const unknown = await client.callTool({ name: 'works_preview', arguments: { template_ids: ['1'] } });
+  assert.match(unknown.content[0].text, /UNKNOWN_WORK: 1/);
+  await client.callTool({ name: 'works_search', arguments: { query: '合掌' } });
   await client.callTool({ name: 'works_preview', arguments: { template_ids: ['1'] } });
   await client.callTool({ name: 'works_preview', arguments: { template_ids: ['1'], animated: true } });
   assert.deepEqual(fetched, ['https://c/1.png', 'https://c/1.gif']);
+});
+
+test('works are remembered by the server, so a download survives the searching window closing', async () => {
+  const { seen, deps } = worksWorld();
+  let live = [{ pid: 5 }, { pid: 7 }];
+  deps.listInstances = () => live;
+  const client = await connect(deps);
+  const unknown = await client.callTool({ name: 'works_download', arguments: { template_id: '1' } });
+  assert.match(unknown.content[0].text, /UNKNOWN_WORK: 1/);
+  const search = JSON.parse((await client.callTool({ name: 'works_search', arguments: { query: '合掌' } })).content[0].text);
+  assert.equal(search.raw, undefined);
+  assert.equal(seen.find((s) => s.method === 'works_search').opts.pid, 5);
+  live = [{ pid: 7 }];
+  const res = await client.callTool({ name: 'works_download', arguments: { template_id: '1' } });
+  assert.equal(res.isError, undefined);
+  const dl = seen.find((s) => s.method === 'works_download');
+  assert.equal(dl.opts.pid, 7);
+  assert.deepEqual(dl.params, { item: { templateId: '1', title: 'AI 修仙合掌转场' } });
 });
