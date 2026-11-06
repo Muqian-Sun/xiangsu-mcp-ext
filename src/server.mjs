@@ -16,7 +16,7 @@ import { Projects, openWithApp } from './projects.mjs';
 import { prepareIcon } from './icons.mjs';
 import { DOWNLOAD_TTL_MS, Downloads, checkTarget, copyProject, editorRoot, outlineProject } from './works.mjs';
 
-const VERSION = '0.3.0';
+const VERSION = '0.4.0';
 
 const target = {
   project_path: z.string().optional().describe('目标工程的绝对路径。与 instance_id 二选一；只开了一个工程窗口时都可省略。'),
@@ -121,6 +121,15 @@ export function createServer(deps = {}) {
     return { ...got, root };
   };
   const expiresAt = () => new Date(Date.now() + DOWNLOAD_TTL_MS).toISOString();
+  // Inspirations, tasks and rank boards belong to the account rather than a project, so any window
+  // serves them. Inspirations seen in this session are kept for inspiration_preview.
+  const seenInspirations = new Map();
+  const community = (method, inspirationsOf) => async (args) => {
+    const { project_path, instance_id, ...params } = args;
+    const out = await d.callPlugin(method, params, await homeWindow({ project_path, instance_id }));
+    if (inspirationsOf) for (const i of inspirationsOf(out)) seenInspirations.set(i.inspiration_id, { title: i.title, cover_url: i.cover_url });
+    return text(out);
+  };
   const workPage = {
     category_id: z.string().optional().describe('works_nav 返回的分类 ID；省略时用第一个分类（推荐）。'),
     cursor: z.number().int().min(0).optional().describe('翻页游标，取上一页的 next_cursor。'),
@@ -378,13 +387,93 @@ export function createServer(deps = {}) {
       },
     },
     {
+      name: 'inspiration_nav',
+      description: '列出像塑「灵感」页的分类（全部、热门音源、头饰、变形等）。灵感是官方和创作者发布的特效创意（图、玩法说明、奖励），首页右侧「灵感」页签就是它。任意一个工程窗口开着即可，用当前登录的账号请求。',
+      shape: { ...target },
+      run: community('inspiration_nav'),
+    },
+    {
+      name: 'inspiration_list',
+      description: '分页列出某个分类下的灵感：inspiration_id、标题、标签（如「激励」）、作者、收藏数、是否已收藏、是否 AI 灵感、封面。拿到 inspiration_id 后用 inspiration_preview 看图、inspiration_detail 看详情。',
+      shape: {
+        ...target,
+        tab: z.string().optional().describe('inspiration_nav 返回的分类名；省略时用第一个（全部）。'),
+        cursor: z.number().int().min(0).optional().describe('翻页游标，取上一页的 next_cursor。'),
+        // The server answers code 1 at 100 (measured); 50 works.
+        count: z.number().int().min(1).max(50).optional().describe('每页数量，默认 20。'),
+      },
+      run: community('inspiration_list', (out) => out.items),
+    },
+    {
+      name: 'inspiration_detail',
+      description: '一个灵感的详情：玩法说明、特效类型、激励说明、全部图片、作者、奖励、关联热点、关联官方工程、已有的同灵感特效及发布量，以及当前账号是否已收藏和总收藏数。',
+      shape: { ...target, inspiration_id: z.string().min(1).describe('inspiration_list / rank_hotspots / task_detail 返回的 inspiration_id，或像塑 / 抖音 App 灵感页里的灵感 ID。') },
+      run: community('inspiration_detail', (out) => [{ inspiration_id: out.inspiration_id, title: out.title, cover_url: out.images[0] || null }]),
+    },
+    {
+      name: 'inspiration_preview',
+      description: '查看灵感的封面图，一次最多 8 个，inspiration_id 须来自本会话的 inspiration_list / inspiration_detail / rank_hotspots（带 topic_id）/ task_detail。',
+      shape: { inspiration_ids: z.array(z.string()).min(1).max(8).describe('要看的 inspiration_id。') },
+      run: async ({ inspiration_ids }) => {
+        const content = [];
+        for (const id of inspiration_ids) {
+          const row = seenInspirations.get(id);
+          if (!row) throw Error(`UNKNOWN_INSPIRATION: ${id}; call inspiration_list, inspiration_detail, rank_hotspots or task_detail first`);
+          content.push({ type: 'text', text: `${row.title}（inspiration_id ${id}）` });
+          content.push(row.cover_url ? await imageContent(d, { url: row.cover_url }) : { type: 'text', text: '无封面图' });
+        }
+        return { content };
+      },
+    },
+    {
+      name: 'inspiration_collect',
+      description: '收藏或取消收藏一个灵感（写入当前登录账号，与灵感详情页的收藏按钮相同），之后重新查询收藏状态确认生效。',
+      shape: {
+        ...target,
+        inspiration_id: z.string().min(1).describe('要收藏的 inspiration_id。'),
+        collect: z.boolean().optional().describe('true 收藏（默认），false 取消收藏。'),
+      },
+      run: community('inspiration_collect'),
+    },
+    {
+      name: 'inspiration_bind',
+      description: '把一条创作灵感绑定到当前工程（编辑器给 agent 的同一接口），提交时会带上它。之后 save_project 落盘。',
+      shape: { ...target, inspiration_id: z.string().min(1).describe('要绑定的 inspiration_id。') },
+      run: plugin('inspiration_bind'),
+    },
+    {
       name: 'tasks_list',
       description:
-        '列出创作者中心的活动和特效任务（与首页任务广场同源）：标题、状态（如「领取」）、是否已领取、剩余天数、收益、标签。bindable=true 的（已领取的任务）可以用 task_bind 绑定到工程；领取要用户在像塑首页或抖音 App 里操作，工具不提供领取。',
-      shape: { ...target },
+        '列出首页活动中心的任务。kind=effect（默认）为活动和特效征集任务：标题、状态（如 WAIT_RECEIVE 待领取 / WAIT_SUBMIT 待提交）、是否已领取、剩余天数、收益、上下线时间、可完成次数；kind=growth 为成长任务：奖励金额、参考工程。拿到 task_id 后用 task_detail 看详情、task_receive 领取、task_bind 绑定到工程（bindable=true 的才能绑）。',
+      shape: { ...target, kind: z.enum(['effect', 'growth']).optional().describe('effect 活动与征集任务（默认），growth 成长任务。') },
       run: async (a) => {
-        const { project_path, instance_id } = a;
-        return text(seenTasks.keep(await d.callPlugin('tasks_list', {}, await homeWindow({ project_path, instance_id }))));
+        const { project_path, instance_id, ...params } = a;
+        return text(seenTasks.keep(await d.callPlugin('tasks_list', params, await homeWindow({ project_path, instance_id }))));
+      },
+    },
+    {
+      name: 'task_detail',
+      description: '一个任务的详情。征集任务返回状态、奖励时间、下线时间、指定模板和完整的任务说明（参与要求、奖项详情、近期热门等内容块）；成长任务返回奖励、参考工程、相关灵感和教程。task_id 须来自本会话的 tasks_list；活动没有详情。',
+      shape: { ...target, task_id: z.string().min(1).describe('tasks_list 返回的 task_id。') },
+      run: async (a) => {
+        const { project_path, instance_id, task_id } = a;
+        const t = seenTasks.get(task_id);
+        if (t.raw.kind === 'activity') throw Error(`NO_TASK_DETAIL: ${task_id} is an activity; only effect and growth tasks have details`);
+        const id = t.raw.kind === 'task' ? t.raw.item_id : t.slim.task_id;
+        const out = await d.callPlugin('task_detail', { kind: t.raw.kind, id }, await homeWindow({ project_path, instance_id }));
+        for (const i of out.inspirations || []) seenInspirations.set(i.inspiration_id, { title: i.title, cover_url: i.cover_url });
+        return text({ task_id, ...out });
+      },
+    },
+    {
+      name: 'task_receive',
+      description: '领取一个征集任务（写入当前登录账号，与活动中心的「领取」按钮相同，领取后不能撤销）。只有状态为 WAIT_RECEIVE 的任务能领，其它状态直接拒绝。返回 designer_task_id 和新状态；领取后重新 tasks_list，该任务即可 task_bind。',
+      shape: { ...target, task_id: z.string().min(1).describe('tasks_list（kind=effect）返回的任务 task_id。') },
+      run: async (a) => {
+        const { project_path, instance_id, task_id } = a;
+        const t = seenTasks.get(task_id);
+        if (t.raw.kind !== 'task') throw Error(`TASK_NOT_RECEIVABLE: ${task_id} is not an effect task (kind=${t.raw.kind})`);
+        return text({ task_id, ...(await d.callPlugin('task_receive', { item_id: t.raw.item_id }, await homeWindow({ project_path, instance_id }))) });
       },
     },
     {
@@ -397,26 +486,82 @@ export function createServer(deps = {}) {
       },
       run: async ({ path: projectDir, task_id }) => {
         const t = seenTasks.get(task_id);
-        if (!t.raw.extra) throw Error(`TASK_NOT_RECEIVED: ${task_id}; receive it in 像塑's homepage or the Douyin app first`);
+        if (t.raw.kind === 'growth') throw Error(`TASK_NOT_BINDABLE: ${task_id} is a growth task`);
+        if (!t.raw.extra) throw Error(`TASK_NOT_RECEIVED: ${task_id}; receive it with task_receive first`);
         const open = (await projects.windows()).some((w) => w.project_path && fs.existsSync(w.project_path) && fs.realpathSync(w.project_path) === fs.realpathSync(projectDir));
         if (open) await projects.close({ project_path: projectDir });
         return text({ task: t.slim, ...(await projects.open({ path: projectDir, activity: t.raw.extra })) });
       },
     },
     {
-      name: 'inspiration_detail',
-      description: '按 ID 查看一条创作灵感的详情：标题、玩法描述、特效类型、激励说明、图片、已有的同灵感特效及发布量。灵感 ID 来自像塑或抖音 App 里的灵感页；编辑器没有灵感列表接口。',
-      shape: { ...target, id: z.string().min(1).describe('灵感 ID。') },
-      run: async (a) => {
-        const { project_path, instance_id, id } = a;
-        return text(await d.callPlugin('inspiration_detail', { id }, await homeWindow({ project_path, instance_id })));
+      name: 'rank_nav',
+      description: '像塑移动版「排行榜」的榜单和筛选项：可用的 rank_type（年轻喜爱榜、特效每日投稿榜、男生/女生喜爱榜、热玩互动榜、模板每日投稿榜、特效跟拍榜）、rank_list 可用的等级 / 面板 / 偏好 / 来自工具 / 年轻喜爱度选项，以及该榜当天（或 date 那天）的分类和条数。分类有两级：level 1 是大类（人像美化、游戏玩法、人设扮演、AI 玩法…），level 2 是细类（基础头饰、测一测、不露脸壁纸…），每个榜的分类不同。按主题的专题榜（如「热爆美妆特效榜」「歌词玩法模板榜」）见 rank_subjects。',
+      shape: {
+        ...target,
+        rank_type: z.number().int().optional().describe('要看分类的榜单，默认 1（年轻喜爱榜）。'),
+        date: z.string().optional().describe('榜单日期 YYYY-MM-DD，默认最新一期。'),
       },
+      run: community('rank_nav'),
     },
     {
-      name: 'inspiration_bind',
-      description: '把一条创作灵感绑定到当前工程（编辑器给 agent 的同一接口），提交时会带上它。之后 save_project 落盘。',
-      shape: { ...target, id: z.string().min(1).describe('灵感 ID。') },
-      run: plugin('inspiration_bind'),
+      name: 'rank_list',
+      description: '分页读取一个排行榜（与像塑移动版排行榜页同一个接口）：名次、特效名、effect_id、等级、投稿量（峰值 / 累计）、跟拍量、男女比例、年轻喜爱度、热玩分、总收益等。可按日期、分类（每级一个，如只看「人像美化 › 美妆」）和筛选项过滤，选项见 rank_nav。',
+      shape: {
+        ...target,
+        rank_type: z.number().int().optional().describe('rank_nav 返回的 rank_type，默认 1（年轻喜爱榜）。'),
+        date: z.string().optional().describe('榜单日期 YYYY-MM-DD，默认最新一期。'),
+        categories: z.array(z.string()).max(3).optional().describe('rank_nav 返回的分类名，每级最多一个，可叠加，如 ["人像美化","美妆"]（大类 + 细类）。'),
+        levels: z.array(z.string()).optional().describe('特效等级，如 ["S","A+"]。'),
+        panels: z.array(z.string()).optional().describe('面板，如 ["头饰","美妆"]。'),
+        preferences: z.array(z.string()).optional().describe('偏好：友友、潮酷。'),
+        tools: z.array(z.string()).optional().describe('来自工具：像塑桌面端、像塑移动版、轻颜 App。'),
+        young_like_scores: z.array(z.number().int().min(1).max(10)).optional().describe('年轻喜爱度 1–10。'),
+        cursor: z.number().int().min(0).optional().describe('翻页游标，取上一页的 next_cursor。'),
+        // The server answers code 1 above 20 (measured).
+        count: z.number().int().min(1).max(20).optional().describe('每页数量，默认 20（最大 20）。'),
+      },
+      run: community('rank_list'),
+    },
+    {
+      name: 'rank_hotspots',
+      description: '热点榜（按热度排序的抖音热点，每小时更新）：名次、topic_id、标题、说明、热度、相关灵感数。传 topic_id 时改为返回该热点下的灵感（inspiration_id、标题、标签、说明、封面）。',
+      shape: {
+        ...target,
+        count: z.number().int().min(1).optional().describe('最多返回多少个热点，默认全部。'),
+        topic_id: z.string().min(1).optional().describe('只看这个热点下的灵感（rank_hotspots 返回的 topic_id）。'),
+      },
+      run: community('rank_hotspots', (out) => (out.tabs || []).flatMap((t) => t.inspirations)),
+    },
+    {
+      name: 'rank_subjects',
+      description: '像塑移动版「专题合集」里按主题的榜单，最新的在前：kind=effect 为特效专题榜（近 200 期，如「测一测玩法特效榜 - 11月」「热爆美妆特效榜」「熊出没IP特效榜」「主题创新优胜特效榜」、各期征集活动优质特效），kind=template 为模板专题榜（如「歌词玩法模板榜」「AI配文创意模板榜」「氛围转场模板榜」）。每个榜带前几个特效、浏览量。keyword 按榜名搜索全部期；传 subject_id 时返回该榜的全部特效（最多 20 个）。',
+      shape: {
+        ...target,
+        subject_id: z.string().min(1).optional().describe('只看这个榜（rank_subjects 返回的 subject_id）。'),
+        kind: z.enum(['effect', 'template']).optional().describe('effect 特效专题榜（默认），template 模板专题榜。'),
+        keyword: z.string().min(1).optional().describe('按榜名搜索，如「美妆」「测一测」「IP」；给定时返回全部匹配的期，不分页。'),
+        cursor: z.number().int().min(0).optional().describe('翻页游标，取上一页的 next_cursor。'),
+        // The server answers code 1 above 20 (measured).
+        count: z.number().int().min(1).max(20).optional().describe('每页数量，默认 20（最大 20）。'),
+      },
+      run: community('rank_subjects'),
+    },
+    {
+      name: 'rank_creators_month',
+      description: '创新计划创作者月榜：名次、创作者 uid 和昵称、上榜素材数、跟拍量、预计奖金。',
+      shape: { ...target },
+      run: community('rank_creators_month'),
+    },
+    {
+      name: 'rank_innovation_picks',
+      description: '创新计划官方精选（像塑移动版发现页的精选列表）：特效名、effect_id、标签、投稿量、总收益、入选日期、封面。kind=template 为模板（移动版展示的就是这个），kind=effect 为特效。',
+      shape: {
+        ...target,
+        kind: z.enum(['template', 'effect']).optional().describe('template 模板（默认），effect 特效。'),
+        offset: z.number().int().min(0).optional().describe('翻页偏移，取上一页的 next_offset。'),
+        count: z.number().int().min(1).max(100).optional().describe('每页数量，默认 20；服务端会过滤，实际条数可能略少。'),
+      },
+      run: community('rank_innovation_picks'),
     },
     {
       name: 'music_categories',

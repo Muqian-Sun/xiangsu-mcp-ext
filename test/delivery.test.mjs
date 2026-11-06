@@ -30,11 +30,11 @@ class Bus {
   }
 }
 
-// A fake editor with one open project and the delivery, community and music modules.
+// A fake editor with one open project and the delivery and music modules.
 function setup({ size = 1000, maxSize = 5000, sameAsTemplate = false, effectIdOk = true, loggedIn = true, remote = 0, perfStatus, openWindow = true, mobileResponse } = {}) {
   const projectDir = tmpdir('xs-proj-');
   const instance = tmpdir('xs-inst-');
-  const calls = { exportDirs: [], imported: [], exist: [], savedJson: 0, iconWindow: [], showPerf: 0, cookie: 0, uploaded: [], marked: [], applied: [], sdkMapping: 0, exportOpts: [], iconDeleted: [] };
+  const calls = { exportDirs: [], imported: [], exist: [], savedJson: 0, iconWindow: [], showPerf: 0, cookie: 0, uploaded: [], applied: [], sdkMapping: 0, exportOpts: [], iconDeleted: [] };
   const business = new Bus();
   const legacy = new Bus();
   business.on('SubmitEffect', () => openWindow && legacy.emit('OnSubmitWindowOpened', 1, size));
@@ -126,31 +126,11 @@ function setup({ size = 1000, maxSize = 5000, sameAsTemplate = false, effectIdOk
         return mobileResponse ?? { statusCode: 200, body: JSON.stringify({ code: 0, message: 'success', data: { id: 'ENC', type: 'studio', ttl: 604800 } }) };
       },
     },
-    [M.urls]: { Domain: { kBackendApiURL: 'https://backend' }, DomainPath: { kActivityAPI: '/acts', kTaskListAPI: '/tasks' } },
     [M.bizUtils]: {
       PlatformUtils: { genSignData: () => 'sig' },
       UserAgentUtils: { userAgentGenerator: () => () => 'ua' },
       ExportEffectPackageUtils: { registerSDKVersionMapping: () => (calls.sdkMapping += 1) },
     },
-    [M.activityTypes]: { getTypeName: (m) => (m.display_type ? 'x' : 'normal') },
-    [M.inspiration]: {
-      getInspirationDetail: async ({ id }) =>
-        id === 'missing'
-          ? { body: { code: 0, data: { base: { imgs: [] }, videos: [] } } }
-          : {
-              body: {
-                code: 0,
-                data: {
-                  base: { id, title: `灵感${id}`, detailDesc: '描述', effectTypes: [{ id: 1, name: '互动' }], bonusText: '有激励', imgs: [{ urlList: ['https://img/1'] }] },
-                  designer: [{ name: '作者', avatar: 'a' }],
-                  award: { amount: 0 },
-                  effects: [{ name: '拆快递', totalPubNum: 169 }],
-                  videos: [1, 2],
-                },
-              },
-            },
-    },
-    [M.inspirationBridge]: { markAgentInspirationUsed: ({ inspirationId }) => calls.marked.push(inspirationId) },
     [M.musicCategory]: {
       MusicCategoryModel: class {
         constructor() {
@@ -305,53 +285,6 @@ test('effect_check exports with the submit flow options', async () => {
   assert.deepEqual(calls.exportOpts[0], { exportName: 'effect', zip: true, extra: { treeShakeIEJs: true, exportRemoteAssetJson: true } });
 });
 
-test('tasks_list slims tasks and prepares the launch extras only for received ones', async (t) => {
-  const { lib } = setup();
-  const seen = [];
-  const realFetch = globalThis.fetch;
-  globalThis.fetch = async (url, opts) => {
-    seen.push([url, opts.headers]);
-    const data = url.endsWith('/acts')
-      ? { activities: [] }
-      : {
-          effect_tasks: [
-            { title: '冷空气美妆', process_status_text: '领取', designer_task_id: '', item_id: 1, task_id: 11, tags: [{ name: '特效' }], ttl: 3 * 86400000 + 5, revenue: '0' },
-            { title: '已领任务', process_status_text: '去提交', designer_task_id: 'D2', item_id: 2, task_id: 22, tags: 'a,b', ttl: -1 },
-          ],
-        };
-    return { ok: true, json: async () => ({ code: 0, data }) };
-  };
-  t.after(() => (globalThis.fetch = realFetch));
-  const out = await lib.tasksList();
-  assert.deepEqual(seen[0][1], { cookie: 'cookie-for-https://backend', 'x-api-sign-data': 'sig', 'user-agent': 'ua' });
-  assert.deepEqual(out.items[0], { task_id: '11', kind: 'task', title: '冷空气美妆', status: '领取', received: false, bindable: false, tags: ['特效'], days_left: 3, revenue: '0', icon_url: null });
-  assert.equal(out.items[1].received, true);
-  assert.deepEqual(out.items[1].tags, ['a', 'b']);
-  assert.equal(out.raw[0].extra, null);
-  assert.deepEqual(out.raw[1].extra, { activity_id: 'D2', activity_name: '已领任务', activity_enter_from: 'homepage', activity_type: 'normal', task_type: 'Normal' });
-});
-
-test('inspiration detail and binding go through the editor modules', async () => {
-  const { lib, calls } = setup();
-  const d = await lib.inspirationDetail({ id: ' 77 ' });
-  assert.deepEqual(d, {
-    id: '77',
-    title: '灵感77',
-    description: '描述',
-    effect_types: ['互动'],
-    bonus_text: '有激励',
-    images: ['https://img/1'],
-    designer: '作者',
-    award: null,
-    effects: [{ name: '拆快递', published: 169 }],
-    videos: 2,
-  });
-  await assert.rejects(lib.inspirationDetail({ id: 'missing' }), /INSPIRATION_NOT_FOUND: missing/);
-  lib.inspirationBind({ id: '77' });
-  assert.deepEqual(calls.marked, ['77']);
-  assert.throws(() => lib.inspirationBind({ id: ' ' }), /INVALID_ID/);
-});
-
 test('music lists a category or a search and applies a track with a clip range', async () => {
   const { lib, calls } = setup();
   assert.deepEqual(await lib.musicCategories(), { categories: [{ code: 'ugc_recommend', name: '推荐' }] });
@@ -484,7 +417,10 @@ test('task_bind needs a received task from tasks_list and reopens the project wi
             { task_id: '11', bindable: false },
             { task_id: '22', bindable: true, title: '已领任务' },
           ],
-          raw: [{ extra: null }, { extra: { activity_id: 'D2', activity_name: '已领任务', activity_enter_from: 'homepage', activity_type: 'normal', task_type: 'Normal' } }],
+          raw: [
+            { kind: 'task', item_id: '1', extra: null },
+            { kind: 'task', item_id: '2', extra: { activity_id: 'D2', activity_name: '已领任务', activity_enter_from: 'homepage', activity_type: 'normal', task_type: 'Normal' } },
+          ],
         };
       }
       if (method === 'project_close') {
