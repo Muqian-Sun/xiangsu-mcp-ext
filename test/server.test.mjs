@@ -20,8 +20,26 @@ test('tools forward to plugin methods with project selection split out', async (
     return { ok: method };
   });
   const { tools } = await client.listTools();
-  assert.deepEqual(tools.map((t) => t.name).sort(), ['ext_status', 'library_apply', 'library_list', 'library_nav', 'library_preview', 'library_search']);
-
+  assert.deepEqual(tools.map((t) => t.name).sort(), [
+    'ext_status',
+    'face_warp_list',
+    'face_warp_set_intensity',
+    'library_apply',
+    'library_list',
+    'library_nav',
+    'library_preview',
+    'library_search',
+    'menu_add',
+    'menu_list',
+  ]);
+  const set = await client.callTool({ name: 'face_warp_set_intensity', arguments: { object_path: 'a/塑型画笔', intensity: 55, item_index: 0 } });
+  assert.deepEqual(JSON.parse(set.content[0].text), { ok: 'face_warp_set_intensity' });
+  const outOfRange = await client.callTool({ name: 'face_warp_set_intensity', arguments: { object_path: 'a', intensity: 101 } });
+  assert.equal(outOfRange.isError, true);
+  assert.equal(seen[0].method, 'face_warp_set_intensity');
+  assert.deepEqual(seen[0].params, { object_path: 'a/塑型画笔', intensity: 55, item_index: 0 });
+  assert.equal(seen.length, 1);
+  seen.length = 0;
   const res = await client.callTool({ name: 'library_apply', arguments: { project_path: '/p', template_id: '111' } });
   assert.equal(res.isError, undefined);
   assert.deepEqual(JSON.parse(res.content[0].text), { ok: 'library_apply' });

@@ -23,7 +23,7 @@ function item(id, title, panelKey, md5 = PKG_MD5) {
 
 function setup({ listItems = [item('111', '芒果脸', undefined)], listStatus = 0, active = true, importResult, downloadBytes = PKG_BYTES } = {}) {
   const shared = fs.mkdtempSync(path.join(os.tmpdir(), 'xs-lib-'));
-  const calls = { download: 0, import: [], undo: [], lock: [], reload: 0 };
+  const calls = { download: 0, import: [], undo: [], lock: [], reload: 0, search: [] };
   const modules = {
     [M.nav]: {
       getDefaultNavList: () => [
@@ -62,12 +62,14 @@ function setup({ listItems = [item('111', '芒果脸', undefined)], listStatus =
       },
     },
     [M.search]: {
-      searchAsset: async ({ panelList }) => ({
-        body: {
-          statusCode: 0,
-          data: { dataInfos: { template: panelList === 'aigc_material' ? [item('999', 'AI 素材', 'aigc_material')] : [item('111', '芒果脸', '3d_distortion'), item('111', '芒果脸', '3d_distortion'), item('222', '大叔脸', 'distortion')] } },
-        },
-      }),
+      searchAsset: async (p) => {
+        calls.search.push(p);
+        const byPanel = {
+          '3d_distortion': [item('111', '芒果脸', '3d_distortion'), item('111', '芒果脸', '3d_distortion'), item('999', 'AI 素材', 'aigc_material')],
+          distortion: [item('222', '大叔脸', undefined)],
+        };
+        return { body: { statusCode: 0, data: { dataInfos: { template: byPanel[p.panelList] || [] } } } };
+      },
     },
     [M.util]: {
       downloadLokiFile: async (_url, dest) => {
@@ -133,11 +135,13 @@ test('list surfaces non-zero status codes', async () => {
   await assert.rejects(lib.list({ panel_key: '3d_distortion' }), /GET_ASSET_LIST_FAILED: statusCode=11/);
 });
 
-test('search dedupes and drops non-applicable panels', async () => {
-  const { lib } = setup();
+test('search queries each searchable applicable panel on its own, dedupes and drops other panels', async () => {
+  const { lib, calls } = setup();
   const out = await lib.search({ query: ' 脸 ' });
   assert.equal(out.query, '脸');
-  assert.deepEqual(out.items.map((i) => i.template_id), ['111', '222']);
+  assert.deepEqual(calls.search.map((p) => p.panelList).sort(), ['3d_distortion', 'distortion']);
+  assert.ok(calls.search.every((p) => p.searchWord === '脸'));
+  assert.deepEqual(out.items.map((i) => [i.template_id, i.panel_key]), [['111', '3d_distortion'], ['222', 'distortion']]);
   await assert.rejects(lib.search({ query: '  ' }), /INVALID_QUERY/);
 });
 

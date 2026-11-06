@@ -138,6 +138,40 @@ export function createServer(call = callPlugin, instances = listInstances, getIm
   );
 
   tool(
+    'menu_list',
+    '列出像塑「添加对象」菜单里的全部官方功能项（工具栏的美妆、美型、AI 实时变脸，以及人脸/身体/2D/3D/AI 玩法/互动/宠物/音乐等分类），返回 menu_id、中文名、所在路径和类型。官方 MCP 的 add_builtin_object 只覆盖其中一部分；美容（面部提拉、祛皱纹等）、面部生成（烟熏妆、卡通脸等）、表情生成（香肠嘴、呲牙尬笑等）、性别年龄、五官处理、身体换装等用这里的 menu_add 添加。query 可按名称或路径过滤。会扣额度的云端 AI 生成项不在列表中。',
+    { project_path: projectPath, query: z.string().optional().describe('按中文名、路径或 menu_id 过滤，如「表情」「美容」「烟熏妆」。') },
+    'menu_list',
+  );
+
+  tool(
+    'menu_add',
+    '按 menu_id 往当前场景添加一个官方功能对象，与在编辑器菜单里点选等效（可撤销）。kind=package 的项（如表情生成里的香肠嘴）会先下载官方素材包再导入。添加后用官方 MCP 的 get_scene 读回对象、capture_preview 验收。',
+    { project_path: projectPath, menu_id: z.string().min(1).describe('menu_list 返回的 menu_id。') },
+    'menu_add',
+    180000,
+  );
+
+  tool(
+    'face_warp_list',
+    '列出当前场景里所有「塑型画笔」组件（FaceWarpX，含猫脸/狗脸），返回层级路径 object_path、是否启用、每一项画笔的序号与强度。官方 MCP 能读到强度但改不了（set_component 写 items 会报反序列化错误），改强度用 face_warp_set_intensity。',
+    { project_path: projectPath },
+    'face_warp_list',
+  );
+
+  tool(
+    'face_warp_set_intensity',
+    '修改「塑型画笔」的强度（与检查器里的强度滑块等效，0–100），只改强度、保留画好的笔刷数据，可在编辑器里撤销。object_path 取 face_warp_list 返回的路径，也可只写能唯一定位的末尾几段（如「尖脸大眼（妆容需拖到该摄像机层级下）/塑型画笔」）。省略 item_index 时改全部画笔项。改完用 capture_preview 验收、save_project 保存。',
+    {
+      project_path: projectPath,
+      object_path: z.string().min(1).describe('face_warp_list 返回的 object_path，或能唯一定位的末尾几段。'),
+      intensity: z.number().min(0).max(100).describe('强度，0–100。'),
+      item_index: z.number().int().min(0).optional().describe('只改某一项画笔；省略时改全部项。'),
+    },
+    'face_warp_set_intensity',
+  );
+
+  tool(
     'library_apply',
     '把一个官方素材应用到目标工程：下载素材包、校验 MD5、按素材库面板相同的流程导入，并默认放进当前场景（可在编辑器里撤销）。template_id 必须来自本会话里 library_list 或 library_search 的结果。应用后用官方 MCP 的 get_scene / inspect 读回新增对象，用 capture_preview 验收。',
     {

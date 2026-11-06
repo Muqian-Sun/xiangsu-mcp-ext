@@ -1,6 +1,12 @@
 # xiangsu-mcp-ext
 
-给像塑（Douyin AR，macOS）的官方 MCP 补上「官方素材库」能力：让 AI 能浏览、搜索官方素材（脸部变形、美型、AI 实时变脸、美妆、滤镜、贴纸、画面特效等），并把素材按素材库面板相同的流程应用到工程里。场景编辑、预览、保存仍用像塑自带的 `xiangsu-mcp-manager`。
+给像塑（Douyin AR，macOS）的官方 MCP 补上官方 MCP 够不到的编辑器能力：
+
+- 官方素材库：浏览、搜索、看封面、应用（脸部变形、美型、AI 实时变脸、美妆、滤镜、贴纸、画面特效等），流程与素材库面板相同。
+- 「添加对象」菜单：工具栏美妆 / 美型 / AI 实时变脸里的全部官方功能项（美容、面部生成、表情生成、性别年龄、五官处理、身体换装等），按菜单项 ID 添加。
+- 塑型画笔（FaceWarpX）强度：官方 MCP 能读不能写，这里按检查器滑块的方式改。
+
+场景编辑、预览、保存仍用像塑自带的 `xiangsu-mcp-manager`。
 
 ## 组成
 
@@ -22,6 +28,12 @@
 | `library_search` | 关键词搜索，范围与素材库面板搜索一致 |
 | `library_preview` | 一次最多 8 个素材的封面图，直接以图片返回，供按画面挑选 |
 | `library_apply` | 下载素材包 → 校验 MD5 → `AssetPackageManager.import` 导入并放进场景（在撤销组内） |
+| `menu_list` | 列出「添加对象」菜单的全部功能项（menu_id、中文名、路径、类型），可按关键词过滤；云端 AI 生成项不暴露 |
+| `menu_add` | 按 menu_id 添加，与菜单点选等效：普通项走编辑器的 `createEntity`，带素材包的动态项（表情生成等）走编辑器的下载导入；核对场景对象确实增加 |
+| `face_warp_list` | 列出场景里的塑型画笔组件及每项画笔强度 |
+| `face_warp_set_intensity` | 改塑型画笔强度（0–100），只换强度、保留笔刷数据，在撤销组内；路径有歧义或写入未生效时报错 |
+
+`library_search` 按面板逐个搜索：素材库搜索接口按「组」请求时每组只回 5 条且不支持翻页，逐个面板请求才能拿全（实测「3D 变形」搜「大」7 条、「跟脸贴纸」搜「耳」148 条，与全量列表比对一致）。
 
 `library_apply` 只接受本会话里 `library_list` / `library_search` 返回过的 `template_id`。应用后用官方 MCP 的 `get_scene` / `inspect` 读回对象，用 `capture_preview` 或 `interact_by_dsl`（先 `wait` 2–3 秒再截图，预览重载有延迟）验收。
 
@@ -52,7 +64,7 @@ node scripts/install.mjs          # 装到 ~/Library/Application Support/DouyinA
 ## 开发
 
 - `npm test`：用模拟的编辑器模块测素材库逻辑和 MCP 工具转发。
-- `config.local.json` 里 `devEval: true` 时，插件额外提供 `describe` / `eval` / `reload`，用于在运行时读编辑器模块源码（`scripts/dump-source.js`）和热加载 `library.cjs`。**日常使用保持 `false`**：`eval` 能在编辑器进程里执行任意代码。
+- `config.local.json` 里 `devEval: true` 时可用 `dev_eval`（在编辑器进程里执行一段探测代码，`scripts/call.mjs dev_eval '{}' --code-file x.js`）；该开关每次调用时读取，改成 `false` 立即失效，不用重开窗口。窗口启动时 `devEval` 为 `true` 的话还会多出 `describe` / `eval`。**日常使用保持 `false`**：它能在编辑器进程里执行任意代码。
 - `node scripts/call.mjs <method> '<json>' [--pid N]`：直调插件。
 - `node scripts/mcp-call.mjs <tool> '<json>' [...]`：新起一个 stdio 服务按顺序调工具，图片落盘到临时目录；验证 `src/` 改动不必重启 Cursor 里的服务。
 - `node scripts/official-call.mjs <tool> '<json>'`：直调像塑官方 MCP（截图落盘到临时目录）。

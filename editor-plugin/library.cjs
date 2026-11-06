@@ -142,20 +142,24 @@ class Library {
   async search({ query }) {
     this.ensureCompatible();
     if (typeof query !== 'string' || !query.trim()) throw Error('INVALID_QUERY: query must be a non-empty string');
-    const groups = this.mod(M.navConst).SearchNavItemKeys;
-    const applicable = new Set(this.nav().panels.map((p) => p.panel_key));
-    const results = await Promise.all(
-      groups.map(async (keys) => {
-        const data = body(await this.mod(M.search).searchAsset({ searchWord: query.trim(), panelList: keys.join(','), getCategoryInfo: true, getAuthorInfo: true }), 'SEARCH');
-        return (data.dataInfos && data.dataInfos.template) || [];
-      }),
+    const q = query.trim();
+    const applicable = this.nav().panels.map((p) => p.panel_key);
+    const searchable = new Set(this.mod(M.navConst).SearchNavItemKeys.flat());
+    const server = await Promise.all(
+      applicable
+        .filter((k) => searchable.has(k))
+        .map(async (k) => {
+          const data = body(await this.mod(M.search).searchAsset({ searchWord: q, panelList: k, getCategoryInfo: true, getAuthorInfo: true }), 'SEARCH');
+          return ((data.dataInfos && data.dataInfos.template) || []).map((t) => ({ ...t, panelKey: t.panelKey || k }));
+        }),
     );
+    const allowed = new Set(applicable);
     const seen = new Map();
-    for (const it of results.flat()) {
-      if (!it || !it.templateId || !applicable.has(it.panelKey)) continue;
+    for (const it of server.flat()) {
+      if (!it || !it.templateId || !allowed.has(it.panelKey)) continue;
       if (!seen.has(String(it.templateId))) seen.set(String(it.templateId), it);
     }
-    return { query: query.trim(), items: this.remember([...seen.values()]) };
+    return { query: q, items: this.remember([...seen.values()]) };
   }
 
   async download(item) {
@@ -226,6 +230,167 @@ class Library {
   }
 }
 
+// ---- Editor "add object" menu (toolbar 美妆/美型/AI 实时变脸 and the hierarchy add menu) ----
+const MENU = {
+  orionui: '@orion/orion-sdk/orionui',
+  dynamic: '@orion/Business/BusinessCommon/MenuConfig/DynamicMenuConfig/DynamicMenuConfig',
+  sceneOps: '@orion/Business/Agent/SceneOps/SceneOpsService',
+};
+// Cloud AI generation / chat entries: they consume account quota or need user uploads, so they are not exposed.
+const MENU_DENY = new Set(['AIDraw', 'AIVideo', 'AIImageCaption', 'Audio_AIMusic', 'AICombine', 'AIChat', 'AIObjectLens']);
+
+Library.prototype.menuApi = function () {
+  const ui = this.mod(MENU.orionui);
+  const EF = this.mod(M.ef);
+  return { I18n: ui.I18n, emc: ui.ExtensionManager.host.getAPI(EF.Extension.MenuConfig.MenuConfigAPIKey).getEntityMenuConfig(), dyn: this.mod(MENU.dynamic).DynamicMenuConfigInfo.instance };
+};
+
+Library.prototype.menuEntries = function () {
+  const { I18n, emc, dyn } = this.menuApi();
+  const tr = (k) => (k ? I18n.t(k) || k : '');
+  const out = [];
+  const walk = (node, trail) => {
+    const cfg = emc.getConfig(node.id) || node;
+    const name = tr(cfg.displayKey) || tr(node.displayKey) || node.displayName || node.id;
+    const kids = node.children || [];
+    if (kids.length) {
+      kids.forEach((c) => walk(c, [...trail, name]));
+      return;
+    }
+    if (MENU_DENY.has(node.id)) return;
+    out.push({
+      menu_id: node.id,
+      name,
+      path: trail.join('/'),
+      kind: cfg.hasPrefab ? 'package' : 'builtin',
+      components: (cfg.components || []).map((c) => c.extraType || c.rttiType).filter(Boolean),
+    });
+  };
+  const tree = dyn.updateOrderEntityMenuConfigs();
+  (Array.isArray(tree) ? tree : [tree]).forEach((n) => walk(n, []));
+  return out;
+};
+
+Library.prototype.menuList = function ({ query } = {}) {
+  const all = this.menuEntries();
+  const q = typeof query === 'string' ? query.trim().toLowerCase() : '';
+  const items = q ? all.filter((e) => `${e.path}/${e.name}/${e.menu_id}`.toLowerCase().includes(q)) : all;
+  return { total: all.length, items };
+};
+
+function countSceneObjects(sceneEditor) {
+  return sceneEditor.getAllSceneObjectEditors().length;
+}
+
+Library.prototype.menuAdd = async function ({ menu_id }) {
+  if (typeof menu_id !== 'string' || !menu_id) throw Error('INVALID_MENU_ID: menu_id must be a non-empty string');
+  if (MENU_DENY.has(menu_id)) throw Error(`MENU_ITEM_NOT_ALLOWED: ${menu_id} is a cloud AI generation entry`);
+  const entry = this.menuEntries().find((e) => e.menu_id === menu_id);
+  if (!entry) throw Error(`UNKNOWN_MENU_ID: ${menu_id}; call menu_list to find ids`);
+  const EF = this.mod(M.ef);
+  if (!EF.ProjectManager.getInstance().hasActiveProject()) throw Error('NO_ACTIVE_PROJECT');
+  const service = this.mod(M.scene).SceneModule.getEditingSceneService();
+  const sceneEditor = service && service.sceneEditor;
+  if (!sceneEditor) throw Error('NO_EDITING_SCENE');
+  const { emc, dyn } = this.menuApi();
+  const before = countSceneObjects(sceneEditor);
+  let created = null;
+  if (entry.kind === 'package') {
+    if (!dyn.downloadTaskMap.has(menu_id)) throw Error(`PACKAGE_NOT_REGISTERED: ${menu_id} has no download task in this editor session`);
+    await dyn.handleDownloadPromise(menu_id);
+  } else {
+    const config = emc.getConfig(menu_id);
+    if (!config) throw Error(`UNKNOWN_MENU_ID: ${menu_id}`);
+    const target = await this.mod(MENU.sceneOps).createEntity(sceneEditor, config, entry.name, () => {});
+    created = target && target.name ? target.name : null;
+  }
+  const after = countSceneObjects(sceneEditor);
+  if (after <= before) throw Error(`MENU_ADD_NO_EFFECT: ${menu_id} did not add scene objects (see editor log)`);
+  return { menu_id, name: entry.name, path: entry.path, kind: entry.kind, created_object: created, scene_objects_added: after - before };
+};
+
+// 塑型画笔 (FaceWarpX) components store brush data per item next to its intensity; the official MCP can
+// read the intensity but cannot write it back without the brush data, so these go through the editor.
+const WARP_EDITORS = { FaceWarpXComponentEditor: 'Human', CatFaceWarpXComponentEditor: 'Cat', DogFaceWarpXComponentEditor: 'Dog' };
+
+function sceneObjectPath(so) {
+  const names = [];
+  for (let p = so; p; p = p.parent) names.unshift(p.name);
+  return names.join('/');
+}
+
+Library.prototype.faceWarps = function () {
+  const EF = this.mod(M.ef);
+  if (!EF.ProjectManager.getInstance().hasActiveProject()) throw Error('NO_ACTIVE_PROJECT');
+  const service = this.mod(M.scene).SceneModule.getEditingSceneService();
+  const sceneEditor = service && service.sceneEditor;
+  if (!sceneEditor) throw Error('NO_EDITING_SCENE');
+  return sceneEditor
+    .getAllComponentEditors()
+    .filter((c) => Object.prototype.hasOwnProperty.call(WARP_EDITORS, c.constructor.name))
+    .map((c) => ({ comp: c, path: sceneObjectPath(c.sceneObject), face: WARP_EDITORS[c.constructor.name] }));
+};
+
+function describeWarp({ comp, path: p, face }) {
+  return {
+    object_path: p,
+    face,
+    enabled: !!comp.enabled,
+    items: (comp.items || []).map((it, index) => ({ index, label: it.labelName || null, intensity: it.intensity })),
+  };
+}
+
+Library.prototype.faceWarpList = function () {
+  return { face_warps: this.faceWarps().map(describeWarp) };
+};
+
+Library.prototype.faceWarpSetIntensity = async function ({ object_path, intensity, item_index }) {
+  if (typeof object_path !== 'string' || !object_path.trim()) throw Error('INVALID_OBJECT_PATH: object_path must be a non-empty string');
+  if (typeof intensity !== 'number' || !Number.isFinite(intensity) || intensity < 0 || intensity > 100) throw Error('INVALID_INTENSITY: intensity must be a number in [0, 100]');
+  const want = object_path.trim().replace(/^\/+|\/+$/g, '');
+  const all = this.faceWarps();
+  const hits = all.filter((w) => w.path === want || w.path.endsWith(`/${want}`));
+  if (hits.length === 0) throw Error(`FACE_WARP_NOT_FOUND: ${want}; available: ${all.map((w) => w.path).join(' | ') || '(none)'}`);
+  if (hits.length > 1) throw Error(`AMBIGUOUS_OBJECT_PATH: ${want} matches ${hits.map((w) => w.path).join(' | ')}; pass a longer path`);
+  const { comp } = hits[0];
+  const items = comp.items || [];
+  if (!items.length) throw Error(`NO_WARP_ITEMS: ${hits[0].path} has no brush items`);
+  if (item_index !== undefined && (!Number.isInteger(item_index) || item_index < 0 || item_index >= items.length)) {
+    throw Error(`INVALID_ITEM_INDEX: ${item_index}; ${hits[0].path} has ${items.length} item(s)`);
+  }
+  const before = describeWarp(hits[0]);
+  const next = items.map((it, i) => (item_index === undefined || i === item_index ? it.withIntensity(intensity) : it));
+  const EF = this.mod(M.ef);
+  EF.UndoSystem.instance.start(`set face warp intensity: ${hits[0].path}`);
+  let res;
+  try {
+    res = comp.setProperty('items', next);
+  } finally {
+    EF.UndoSystem.instance.end();
+  }
+  if (res instanceof Error) throw Error(`SET_PROPERTY_FAILED: ${res.message}`);
+  const after = describeWarp(hits[0]);
+  const changed = after.items.filter((it) => item_index === undefined || it.index === item_index);
+  if (changed.some((it) => it.intensity !== intensity)) throw Error(`WRITE_NOT_APPLIED: ${JSON.stringify(after.items)}`);
+  return { object_path: hits[0].path, before: before.items, after: after.items };
+};
+
+const CONFIG_PATH = path.join(__dirname, '..', 'config.local.json');
+const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
+
+// Dev-only escape hatch for probing editor internals. The flag is read on every call, so turning
+// devEval off in config.local.json disables it immediately without reopening editor windows.
+Library.prototype.devEval = async function ({ code }) {
+  let devEval = false;
+  try {
+    devEval = JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf8')).devEval === true;
+  } catch (_) {}
+  if (!devEval) throw Error('EVAL_DISABLED');
+  if (typeof code !== 'string' || !code) throw Error('code must be a non-empty string');
+  const value = await new AsyncFunction('mod', 'require', code)(this.mod, require);
+  return value === undefined ? null : JSON.parse(JSON.stringify(value));
+};
+
 // RPC method name -> Library method. The runtime dispatches through this table, so adding a method
 // here takes effect without reopening editor windows.
 const METHODS = {
@@ -235,6 +400,11 @@ const METHODS = {
   library_search: 'search',
   library_covers: 'covers',
   library_apply: 'apply',
+  menu_list: 'menuList',
+  menu_add: 'menuAdd',
+  face_warp_list: 'faceWarpList',
+  face_warp_set_intensity: 'faceWarpSetIntensity',
+  dev_eval: 'devEval',
 };
 
-module.exports = { Library, slim, M, REQUIRED, MAX_PREVIEW, METHODS };
+module.exports = { Library, slim, M, MENU, MENU_DENY, REQUIRED, MAX_PREVIEW, METHODS };
