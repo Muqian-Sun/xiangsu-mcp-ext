@@ -1,10 +1,13 @@
 # xiangsu-mcp-ext
 
+[![test](https://github.com/Muqian-Sun/xiangsu-mcp-ext/actions/workflows/test.yml/badge.svg)](https://github.com/Muqian-Sun/xiangsu-mcp-ext/actions/workflows/test.yml) [![license: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE) ![platform: macOS](https://img.shields.io/badge/platform-macOS-lightgrey) ![node >= 24](https://img.shields.io/badge/node-%3E%3D24-brightgreen)
+
 像塑（Douyin AR，macOS）的 MCP 扩展：**一个 MCP 服务**同时提供像塑官方 MCP 的全部工具，以及官方 MCP 够不到的编辑器能力。
 
 - 官方工具原样转发（`get_scene`、`edit_by_dsl`、`capture_preview`、`save_project` 等），像塑重启后自动重连，官方工具列表变化时通知客户端刷新。
 - 官方素材库：浏览、搜索、看封面、应用（脸部变形、美型、AI 实时变脸、美妆、滤镜、贴纸、画面特效等），流程与素材库面板相同。
 - 「添加对象」菜单：工具栏美妆 / 美型 / AI 实时变脸里的全部官方功能项（美容、面部生成、表情生成、性别年龄、五官处理、身体换装等），可看示意图后按菜单项 ID 添加。
+- 首页作品：浏览、搜索、看封面，下载完整工程到本地（官方工程和已发布的作品），供 agent 读取场景、脚本和资源，学习别人的做法。
 - 塑型画笔（FaceWarpX）强度：官方能读不能写，这里按检查器滑块的方式改。
 - 工程窗口：新建空白工程（首次保存到指定目录）、打开、关闭。
 - 干净删除：删除对象时找出只被它使用的资源和它导入时带进来的素材包文件夹，确认后删除。
@@ -31,16 +34,24 @@
 | `library_nav` / `library_list` / `library_search` | 官方素材库面板、分页列表、关键词搜索（逐个面板查询以拿全结果） |
 | `library_preview` | 一次最多 8 个素材的封面图 |
 | `library_apply` | 下载素材包、校验 MD5、导入并放进场景（可撤销）；返回新增对象和素材包文件夹 |
+| `works_nav` / `works_list` / `works_search` | 首页作品分类（推荐、官方工程、新手必做、游戏、妆容、AI玩法…）、分页列表（可按推荐 / 最新 / 使用量排序）、按作品名搜索 |
+| `works_preview` | 一次最多 8 个作品的封面，`animated=true` 看动图 |
+| `works_download` | 下载并解压完整工程（与首页点开作品同一流程，但不开窗口），返回工程目录和文件清单；`dest` 给定时另存一份参考副本 |
 | `menu_list` / `menu_preview` / `menu_add` | 「添加对象」菜单项列表、说明和示意图、按菜单项添加（可撤销）；云端 AI 生成项不暴露 |
 | `face_warp_list` / `face_warp_set_intensity` | 列出塑型画笔、改强度（保留笔刷数据，可撤销） |
 | `object_remove` | 删除对象（可撤销），报告只被它使用的资源和它导入时带来的素材包文件夹；`delete_unused_resources=true` 时一并删除 |
 | `resource_delete_unused` | 删除 `object_remove` 报告的路径；场景仍在引用的一律拒绝 |
 
-使用顺序示例：`library_search` → `library_preview` → `library_apply` → `capture_preview` → `save_project`。
+使用顺序示例：
+
+- 套用官方素材：`library_search` → `library_preview` → `library_apply` → `capture_preview` → `save_project`。
+- 参考别人的作品：`works_search`（或 `works_list`）→ `works_preview` → `works_download` → 按返回的 `outline.files` 读 `effect.dyehpj`、`Assets/` 下的场景和 `Graph/` 下的脚本；想看实际效果再用 `project_open` 打开返回的 `project_path`。
 
 几点约定：
 
-- `library_apply` 只接受同一工程窗口里 `library_list` / `library_search` 返回过的 `template_id`（窗口重开或扩展代码更新后需重新搜索）。
+- `library_apply` 只接受同一工程窗口里 `library_list` / `library_search` 返回过的 `template_id`（窗口重开或扩展代码更新后需重新搜索）；`works_preview` / `works_download` 同理，只接受 `works_list` / `works_search` 返回过的作品。
+- `works_*` 与当前工程无关，不指定工程时固定由 pid 最小的工程窗口处理，保证先列表、后下载落在同一个窗口。
+- `works_download` 走编辑器自己的下载流程：工程包缓存在 `~/Library/Application Support/DouyinAR/Shared/Resources/LokiDownload/TemplateResources/`，每次解压一份新的到像塑实例目录的 `ProjectCreatedTmp/CreatedFromTemplate/` 下。`dest` 副本不含 `Library/` 缓存（编辑器打开时会重建）。
 - 预览重载有延迟，应用后用 `interact_by_dsl` 先 `wait` 2–3 秒再截图更稳。
 - 资源删除不可撤销；对象删除可以在编辑器里撤销，但已删除的资源不会回来。
 - 「孤儿资源」只按场景直接引用判断（资源的编辑器 guid 是否出现在场景序列化数据里）。只通过材质等间接引用的资源不会被判为孤儿。
@@ -96,11 +107,19 @@ node scripts/install.mjs   # 装到 ~/Library/Application Support/DouyinAR/Plugi
 - 导入：`@orion/orion-sdk/EditorFramework` 的 `Resource.AssetPackageManager.instance.import`、`UndoSystem`、`PreviewSyncer`
 - 菜单：`@orion/orion-sdk/orionui` 的 `ExtensionManager` / `I18n`，`DynamicMenuConfigInfo`，`SceneOpsService.createEntity`，`HoverTipsMap`
 - 工程窗口：`OpenProjectFromHomeCommand` + `EditSender`，`closeProjectAndBackToHome`
+- 首页作品：`@orion/Business/HomeWindow/TemplatesPanel/Request/{templatesPanel,templatesCategory}`、`.../Model/util.transformTemplate`、`.../Model/DownloadTemplateModel`
+
+## 协议与声明
+
+代码以 [MIT 协议](LICENSE) 开源。另外请注意：
+
+- 本项目是个人开发的非官方工具，与字节跳动、抖音、像塑没有任何关联，也未获其认可或支持。「像塑」「抖音」「Douyin AR」等名称和商标归各自权利人所有。
+- 仓库只包含本项目自己的代码，不包含像塑的程序、源码或任何素材。通过本工具访问的官方素材、首页作品，其版权归像塑或原作者所有，使用须遵守像塑 / 抖音的用户协议和平台规则。
+- 首页作品只建议用于学习参考：不要把下载的工程、素材原样或稍作修改后重新发布，也不要把它们放进公开仓库。
+- 本工具调用的是编辑器内部接口，可能随像塑升级失效，也可能被平台限制。使用风险自负，作者不对因使用本工具造成的账号、数据或作品损失负责（详见 MIT 协议的免责条款）。
 
 ## English
 
-Unofficial MCP extension for Douyin AR (像塑) on macOS. One stdio MCP server proxies every tool of the editor's official MCP (with automatic reconnects) and adds what the official server cannot do: browse/search/preview/apply official library assets, add any item of the editor's "add object" menu (toolbar makeup / reshape / AI face effects), set FaceWarpX brush intensity, open/create/close project windows, and remove objects together with resources only they used. It works through a small editor plugin that exposes a token-protected RPC on 127.0.0.1 inside each project window. Relies on editor internals (verified on 9.7.2); `ext_status` reports any missing internals. Install with `npm ci && node scripts/install.mjs`, then register `node src/server.mjs` as a stdio MCP server.
+Unofficial MCP extension for Douyin AR (像塑) on macOS. One stdio MCP server proxies every tool of the editor's official MCP (with automatic reconnects) and adds what the official server cannot do: browse/search/preview/apply official library assets, browse/search/download the homepage works (official projects and published effects) as full projects an agent can read and learn from, add any item of the editor's "add object" menu (toolbar makeup / reshape / AI face effects), set FaceWarpX brush intensity, open/create/close project windows, and remove objects together with resources only they used. It works through a small editor plugin that exposes a token-protected RPC on 127.0.0.1 inside each project window. Relies on editor internals (verified on 9.7.2); `ext_status` reports any missing internals. Install with `npm ci && node scripts/install.mjs`, then register `node src/server.mjs` as a stdio MCP server.
 
-## License
-
-MIT
+Licensed under [MIT](LICENSE). Not affiliated with or endorsed by ByteDance / Douyin; all product names and trademarks belong to their owners. The repository contains no editor code or assets. Official assets and homepage works accessed through this tool belong to 像塑 or their creators and are subject to the platform's terms; use downloaded works for learning only and do not redistribute them.
