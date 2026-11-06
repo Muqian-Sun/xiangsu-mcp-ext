@@ -39,5 +39,7 @@ module.exports = {
   REQUIRED: assets.REQUIRED,
   MENU_DENY: menu.MENU_DENY,
   WORK_SORTS: works.SORT,
+  PICK_KINDS: community.PICK_KINDS,
+  SUBJECT_KINDS: community.SUBJECT_KINDS,
   CONFIG_PATH: dev.CONFIG_PATH,
 };

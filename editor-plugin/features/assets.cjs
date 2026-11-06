@@ -82,11 +82,15 @@ const REQUIRED = {
     [M.urls, 'Domain.kBackendApiURL'],
     [M.urls, 'DomainPath.kActivityAPI'],
     [M.urls, 'DomainPath.kTaskListAPI'],
+    [M.urls, 'DomainPath.kGrowthTaskList'],
     [M.bizUtils, 'PlatformUtils.genSignData'],
     [M.bizUtils, 'UserAgentUtils.userAgentGenerator'],
     [M.orionui, 'CookieManager'],
     [M.activityTypes, 'getTypeName'],
-    [M.inspiration, 'getInspirationDetail'],
+    [M.activityTypes, 'TaskStatus.WAIT_RECEIVE'],
+    [M.activityTypes, 'TaskStatus.WAIT_SUBMIT'],
+    [M.activityTypes, 'growthTaskType.Newbie'],
+    [M.inspirationConst, 'IS_COLLECT_PARAMS_TYPE.Default'],
     [M.inspirationBridge, 'markAgentInspirationUsed'],
   ],
   music: [
@@ -118,8 +122,9 @@ function slim(item) {
 }
 
 class Library {
-  constructor(mod) {
+  constructor(mod, fetchImpl = (...args) => globalThis.fetch(...args)) {
     this.mod = mod;
+    this.fetch = fetchImpl;
     this.applying = false;
   }
 
