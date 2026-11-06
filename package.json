@@ -1,0 +1,14 @@
+{
+  "name": "xiangsu-mcp-ext",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "MCP extension that exposes 像塑 official asset library and toolbar presets via an editor plugin",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "install-plugin": "node scripts/install.mjs",
+    "test": "node --test test/"
+  }
+}
