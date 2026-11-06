@@ -2,7 +2,6 @@
 // stdio MCP server: everything 像塑's official MCP offers (proxied unchanged), plus editor features the
 // official server cannot reach, served by the XiangsuMcpExt editor plugin.
 import fs from 'node:fs';
-import path from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
@@ -235,9 +234,9 @@ export function createServer(deps = {}) {
         if (dest !== undefined) {
           try {
             root = copyProject(got.project_path, dest);
+            d.downloads.record({ path: root, template_id, title: got.title });
           } finally {
             d.downloads.cleanup({ paths: [got.root] });
-            if (fs.existsSync(dest)) d.downloads.record({ path: path.resolve(dest), template_id, title: got.title });
           }
         }
         return text({ template_id: got.template_id, title: got.title, project_path: root, expires_at: expiresAt(), outline: outlineProject(root) });
