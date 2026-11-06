@@ -49,10 +49,12 @@ const methods = {
     return hit;
   },
 
-  rememberWorks(items) {
+  // Windows come and go while an agent works, so the plugin keeps no works state: the raw records go
+  // back with the slim items and the MCP server hands one back to works_download.
+  worksPage(info) {
     const transform = this.mod(M.worksUtil).transformTemplate;
-    for (const t of items) if (t && t.templateId) this.works.set(String(t.templateId), t);
-    return items.filter((t) => t && t.templateId).map((t) => slimWork(t, transform));
+    const raw = (info.template || []).filter((t) => t && t.templateId);
+    return { items: raw.map((t) => slimWork(t, transform)), raw, next_cursor: info.cursor ?? null, has_more: !!info.hasNext };
   },
 
   async worksList({ category_id, cursor = 0, count = 30, sort } = {}) {
@@ -62,8 +64,7 @@ const methods = {
       await this.mod(M.worksCategory).apiTemplatesCategory({ cursor, count, panelKey: PANEL_KEY, categoryId: category.id, ranker, getCollectStatus: true }),
       'GET_WORKS_LIST',
     );
-    const info = data.dataInfos || {};
-    return { category, items: this.rememberWorks(info.template || []), next_cursor: info.cursor ?? null, has_more: !!info.hasNext };
+    return { category, ...this.worksPage(data.dataInfos || {}) };
   },
 
   // Same request the homepage search box sends: scoped to one category, matched on the project name.
@@ -85,31 +86,16 @@ const methods = {
       }),
       'SEARCH_WORKS',
     );
-    const info = data.dataInfos || {};
-    return { query: q, category, items: this.rememberWorks(info.template || []), next_cursor: info.cursor ?? null, has_more: !!info.hasNext };
-  },
-
-  workItem(template_id) {
-    const t = this.works.get(String(template_id));
-    if (!t) throw Error(`UNKNOWN_WORK: ${template_id}; call works_list or works_search first`);
-    return t;
-  },
-
-  worksCovers({ template_ids }) {
-    if (!Array.isArray(template_ids) || !template_ids.length || template_ids.length > 8) throw Error('INVALID_TEMPLATE_IDS: pass 1-8 template ids');
-    const transform = this.mod(M.worksUtil).transformTemplate;
-    return template_ids.map((id) => {
-      const s = slimWork(this.workItem(id), transform);
-      return { template_id: s.template_id, title: s.title, cover_url: s.cover_url, gif_url: s.gif_url };
-    });
+    return { query: q, category, ...this.worksPage(data.dataInfos || {}) };
   },
 
   // Downloads the project zip (into the editor's LokiDownload/TemplateResources cache) and unzips a
   // fresh copy into the instance's ProjectCreatedTmp/CreatedFromTemplate, exactly as opening a work
-  // from the homepage does; the project itself is not opened.
-  async worksDownload({ template_id }) {
+  // from the homepage does; the project itself is not opened. `item` is a raw record from works_list /
+  // works_search.
+  async worksDownload({ item: t }) {
     this.ensureCompatible('works');
-    const t = this.workItem(template_id);
+    if (!t || !t.templateId) throw Error('INVALID_WORK: pass the raw work record returned by works_list / works_search');
     if (!Object.values((t.businessExtra && t.businessExtra.fileMap) || {}).some((f) => f && f.url)) {
       throw Error(`NO_PACKAGE_FILE: work ${t.templateId} has no downloadable project`);
     }
@@ -136,7 +122,6 @@ const METHODS = {
   works_nav: 'worksNav',
   works_list: 'worksList',
   works_search: 'worksSearch',
-  works_covers: 'worksCovers',
   works_download: 'worksDownload',
 };
 

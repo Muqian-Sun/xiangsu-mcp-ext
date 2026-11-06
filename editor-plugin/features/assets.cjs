@@ -74,7 +74,6 @@ class Library {
   constructor(mod) {
     this.mod = mod;
     this.items = new Map();
-    this.works = new Map();
     this.applying = false;
   }
 

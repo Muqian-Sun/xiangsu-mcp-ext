@@ -59,25 +59,36 @@ export function createServer(deps = {}) {
     return text(await d.callPlugin(method, params, { projectPath, timeoutMs }));
   };
 
-  // Homepage works do not depend on the project, so any window serves them; without a target the
-  // lowest pid is used so works_list and a later works_download hit the same window.
+  // Homepage works do not depend on the project, so any window serves them (the lowest pid when no
+  // target is given).
   const homeWindow = async ({ project_path, instance_id }) => {
     if (project_path !== undefined || instance_id !== undefined) return { projectPath: await projects.resolveProjectPath({ project_path, instance_id }) };
     const pids = d.listInstances().map((s) => s.pid).sort((a, b) => a - b);
     if (!pids.length) throw Error('NO_EDITOR_WINDOW: open any project window first (works are served by the XiangsuMcpExt plugin inside it)');
     return { pid: pids[0] };
   };
+  // Works seen in this session, kept here rather than in a window: windows open and close while an
+  // agent works, and a later download may be served by a different one.
+  const seenWorks = new Map();
   const works = (method) => async (args) => {
     const { project_path, instance_id, ...params } = args;
-    return text(await d.callPlugin(method, params, await homeWindow({ project_path, instance_id })));
+    const { raw, ...page } = await d.callPlugin(method, params, await homeWindow({ project_path, instance_id }));
+    page.items.forEach((slim, i) => seenWorks.set(slim.template_id, { slim, raw: raw[i] }));
+    return text(page);
+  };
+  const seenWork = (template_id) => {
+    const w = seenWorks.get(String(template_id));
+    if (!w) throw Error(`UNKNOWN_WORK: ${template_id}; call works_list or works_search first`);
+    return w;
   };
   const openPaths = async () => (await projects.windows()).map((w) => w.project_path).filter(Boolean);
   // Every works download first sweeps out earlier ones past their lifetime.
   const pruneDownloads = async () => d.downloads.cleanup({ olderThanMs: DOWNLOAD_TTL_MS, openPaths: await openPaths() });
   const downloadWork = async (args) => {
     const { project_path, instance_id, template_id } = args;
+    const { raw } = seenWork(template_id);
     await pruneDownloads();
-    const got = await d.callPlugin('works_download', { template_id }, { ...(await homeWindow({ project_path, instance_id })), timeoutMs: 600000 });
+    const got = await d.callPlugin('works_download', { item: raw }, { ...(await homeWindow({ project_path, instance_id })), timeoutMs: 600000 });
     const root = editorRoot(got.project_path);
     d.downloads.record({ path: root, template_id: got.template_id, title: got.title });
     return { ...got, root };
@@ -201,13 +212,11 @@ export function createServer(deps = {}) {
       name: 'works_preview',
       description: '查看首页作品的封面（animated=true 时看动图），一次最多 8 个，template_id 须来自本会话的 works_list / works_search。',
       shape: {
-        ...target,
         template_ids: z.array(z.string()).min(1).max(8).describe('要看的作品 template_id。'),
         animated: z.boolean().optional().describe('看动图（gif）而不是静态封面，默认 false；动图较大。'),
       },
-      run: async (a) => {
-        const { project_path, instance_id, template_ids, animated = false } = a;
-        const rows = await d.callPlugin('works_covers', { template_ids }, await homeWindow({ project_path, instance_id }));
+      run: async ({ template_ids, animated = false }) => {
+        const rows = template_ids.map((id) => seenWork(id).slim);
         const content = [];
         for (const r of rows) {
           const url = (animated && r.gif_url) || r.cover_url || r.gif_url;
