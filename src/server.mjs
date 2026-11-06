@@ -405,7 +405,7 @@ export function createServer(deps = {}) {
     },
     {
       name: 'inspiration_detail',
-      description: '按 ID 查看一条创作灵感的详情（描述、图片、奖励、关联特效、音乐）。灵感 ID 来自像塑或抖音 App 里的灵感页；编辑器没有灵感列表接口。',
+      description: '按 ID 查看一条创作灵感的详情：标题、玩法描述、特效类型、激励说明、图片、已有的同灵感特效及发布量。灵感 ID 来自像塑或抖音 App 里的灵感页；编辑器没有灵感列表接口。',
       shape: { ...target, id: z.string().min(1).describe('灵感 ID。') },
       run: async (a) => {
         const { project_path, instance_id, id } = a;

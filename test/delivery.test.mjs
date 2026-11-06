@@ -135,7 +135,21 @@ function setup({ size = 1000, maxSize = 5000, sameAsTemplate = false, effectIdOk
     },
     [M.activityTypes]: { getTypeName: (m) => (m.display_type ? 'x' : 'normal') },
     [M.inspiration]: {
-      getInspirationDetail: async ({ id }) => ({ body: { code: 0, data: { base: { title: `灵感${id}`, imgs: [{ urlList: ['https://img/1'] }] }, designer: { name: '作者', avatar: 'a' }, videos: [1, 2] } } }),
+      getInspirationDetail: async ({ id }) =>
+        id === 'missing'
+          ? { body: { code: 0, data: { base: { imgs: [] }, videos: [] } } }
+          : {
+              body: {
+                code: 0,
+                data: {
+                  base: { id, title: `灵感${id}`, detailDesc: '描述', effectTypes: [{ id: 1, name: '互动' }], bonusText: '有激励', imgs: [{ urlList: ['https://img/1'] }] },
+                  designer: [{ name: '作者', avatar: 'a' }],
+                  award: { amount: 0 },
+                  effects: [{ name: '拆快递', totalPubNum: 169 }],
+                  videos: [1, 2],
+                },
+              },
+            },
     },
     [M.inspirationBridge]: { markAgentInspirationUsed: ({ inspirationId }) => calls.marked.push(inspirationId) },
     [M.musicCategory]: {
@@ -321,10 +335,19 @@ test('tasks_list slims tasks and prepares the launch extras only for received on
 test('inspiration detail and binding go through the editor modules', async () => {
   const { lib, calls } = setup();
   const d = await lib.inspirationDetail({ id: ' 77 ' });
-  assert.equal(d.base.title, '灵感77');
-  assert.deepEqual(d.base.imgs, ['https://img/1']);
-  assert.deepEqual(d.designer, { name: '作者' });
-  assert.equal(d.videos, 2);
+  assert.deepEqual(d, {
+    id: '77',
+    title: '灵感77',
+    description: '描述',
+    effect_types: ['互动'],
+    bonus_text: '有激励',
+    images: ['https://img/1'],
+    designer: '作者',
+    award: null,
+    effects: [{ name: '拆快递', published: 169 }],
+    videos: 2,
+  });
+  await assert.rejects(lib.inspirationDetail({ id: 'missing' }), /INSPIRATION_NOT_FOUND: missing/);
   lib.inspirationBind({ id: '77' });
   assert.deepEqual(calls.marked, ['77']);
   assert.throws(() => lib.inspirationBind({ id: ' ' }), /INVALID_ID/);

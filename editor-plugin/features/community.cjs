@@ -75,15 +75,18 @@ const methods = {
     if (!b || b.code !== 0) throw Error(`INSPIRATION_FAILED: code=${b && b.code} message=${(b && b.message) || ''}`);
     const d = b.data || {};
     const base = d.base || {};
+    if (!base.id) throw Error(`INSPIRATION_NOT_FOUND: ${id.trim()}`);
+    const award = d.award && d.award.amount ? { amount: d.award.amount, text: d.award.text || d.award.desc || '' } : null;
     return {
-      id: id.trim(),
-      base: { ...base, imgs: (base.imgs || []).map((i) => (i.urlList || [])[0]).filter(Boolean) },
-      designer: d.designer ? { name: d.designer.name } : null,
-      artwork_type: d.inspArtworkType ?? null,
-      award: d.award ?? null,
-      task_award: d.taskAward ?? null,
-      effects: d.effects ?? null,
-      music: d.musicInfo ?? null,
+      id: String(base.id),
+      title: base.title || '',
+      description: base.detailDesc || '',
+      effect_types: (base.effectTypes || []).map((t) => t && t.name).filter(Boolean),
+      bonus_text: base.bonusText || '',
+      images: (base.imgs || []).map((i) => (i.urlList || [])[0]).filter(Boolean),
+      designer: Array.isArray(d.designer) ? (d.designer[0] && d.designer[0].name) || null : (d.designer && d.designer.name) || null,
+      award,
+      effects: (d.effects || []).map((e) => ({ name: e.name, published: e.totalPubNum ?? null })),
       videos: (d.videos || []).length,
     };
   },
