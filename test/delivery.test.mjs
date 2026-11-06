@@ -13,7 +13,6 @@ import { sniffImage } from '../src/images.mjs';
 const require = createRequire(import.meta.url);
 process.env.XIANGSU_MCP_EXT_STATE = tmpdir('xs-state-');
 const { Library, M } = require('../editor-plugin/library.cjs');
-const { findUrl } = require('../editor-plugin/features/delivery.cjs');
 
 class Bus {
   constructor() {
@@ -32,23 +31,11 @@ class Bus {
   }
 }
 
-class Version {
-  constructor(n) {
-    this.n = n;
-  }
-  isLessThan(o) {
-    return this.n < o.n;
-  }
-  toString() {
-    return `v${this.n}`;
-  }
-}
-
 // A fake editor with one open project and the delivery, community and music modules.
-function setup({ size = 1000, maxSize = 5000, sameAsTemplate = false, effectIdOk = true, loggedIn = true, minSdk = 5, limitSdk = 9, remote = 0, perfStatus, openWindow = true, mobileResponse } = {}) {
+function setup({ size = 1000, maxSize = 5000, sameAsTemplate = false, effectIdOk = true, loggedIn = true, remote = 0, perfStatus, openWindow = true, mobileResponse } = {}) {
   const projectDir = tmpdir('xs-proj-');
   const instance = tmpdir('xs-inst-');
-  const calls = { exportDirs: [], imported: [], exist: [], savedJson: 0, iconWindow: [], showPerf: 0, cookie: 0, uploaded: [], marked: [], applied: [] };
+  const calls = { exportDirs: [], imported: [], exist: [], savedJson: 0, iconWindow: [], showPerf: 0, cookie: 0, uploaded: [], marked: [], applied: [], sdkMapping: 0, exportOpts: [], iconDeleted: [] };
   const business = new Bus();
   const legacy = new Bus();
   business.on('SubmitEffect', () => openWindow && legacy.emit('OnSubmitWindowOpened', 1, size));
@@ -62,11 +49,11 @@ function setup({ size = 1000, maxSize = 5000, sameAsTemplate = false, effectIdOk
         assert.equal(scene.id, 'main');
         assert.equal(opts.zip, true);
         calls.exportDirs.push(dir);
+        calls.exportOpts.push(opts);
         const packagePath = path.join(dir, 'effect.zip');
         fs.writeFileSync(packagePath, Buffer.alloc(size));
         return { packagePath };
       },
-      getMinimumSdkVersionOnSave: async (type) => (assert.equal(type, 'MOBILE_PREVIEW'), new Version(minSdk)),
     },
   };
   const iconMap = { 0: 'Icon/femaleIcon.png', 1: 'Icon/maleIcon.png', 2: 'Icon/commonIcon.png' };
@@ -76,6 +63,7 @@ function setup({ size = 1000, maxSize = 5000, sameAsTemplate = false, effectIdOk
     }
     importAndCreateIcon(t, p) {
       calls.imported.push([t, p]);
+      this.created.add(t);
     }
     setIconExistState(t, v) {
       calls.exist.push([t, v]);
@@ -83,8 +71,20 @@ function setup({ size = 1000, maxSize = 5000, sameAsTemplate = false, effectIdOk
     saveIconJson() {
       calls.savedJson += 1;
     }
+    isIconCreated(t) {
+      return this.created.has(t);
+    }
+    deleteIcon(t) {
+      calls.iconDeleted.push(['dirty', t]);
+    }
+    uploadDeleteIcon(t) {
+      calls.iconDeleted.push(['delete', t]);
+      fs.rmSync(path.join(projectDir, iconMap[t]), { force: true });
+      this.created.delete(t);
+    }
   }
   const icons = new IconPreviewManager();
+  icons.created = new Set();
   const submissionApi = {
     maxEffectPackageSize: maxSize,
     checkEffectIdConsistency: () => effectIdOk,
@@ -116,7 +116,6 @@ function setup({ size = 1000, maxSize = 5000, sameAsTemplate = false, effectIdOk
     [M.perfTest]: { PerfTestAPIKey: 'perfKey' },
     [M.events]: { BusinessEventManager: { TypeGuard: () => business } },
     [M.login]: { loginContribution: { getLoginStatus: async () => ({ isLoggedIn: loggedIn }) } },
-    [M.sdkLimit]: { getLimitSdkVersionInfo: () => ({ limitVersion: new Version(limitSdk) }) },
     [M.remoteAssets]: {
       RemoteAssetManager: { getInstance: () => ({ getUsedRemoteAssets: () => Array(remote), getRemoveRemoteAssetsSize: () => 42 }) },
     },
@@ -125,11 +124,15 @@ function setup({ size = 1000, maxSize = 5000, sameAsTemplate = false, effectIdOk
       requestMobilePreviewURL: async (file) => {
         assert.equal(calls.cookie, 1, 'cookie is fetched before the upload');
         calls.uploaded.push([file, fs.existsSync(file)]);
-        return mobileResponse ?? { body: JSON.stringify({ code: 0, data: { qrcode_url: 'https://preview.example/abc' } }) };
+        return mobileResponse ?? { statusCode: 200, body: JSON.stringify({ code: 0, message: 'success', data: { id: 'ENC', type: 'studio', ttl: 604800 } }) };
       },
     },
     [M.urls]: { Domain: { kBackendApiURL: 'https://backend' }, DomainPath: { kActivityAPI: '/acts', kTaskListAPI: '/tasks' } },
-    [M.bizUtils]: { PlatformUtils: { genSignData: () => 'sig' }, UserAgentUtils: { userAgentGenerator: () => () => 'ua' } },
+    [M.bizUtils]: {
+      PlatformUtils: { genSignData: () => 'sig' },
+      UserAgentUtils: { userAgentGenerator: () => () => 'ua' },
+      ExportEffectPackageUtils: { registerSDKVersionMapping: () => (calls.sdkMapping += 1) },
+    },
     [M.activityTypes]: { getTypeName: (m) => (m.display_type ? 'x' : 'normal') },
     [M.inspiration]: {
       getInspirationDetail: async ({ id }) => ({ body: { code: 0, data: { base: { title: `灵感${id}`, imgs: [{ urlList: ['https://img/1'] }] }, designer: { name: '作者', avatar: 'a' }, videos: [1, 2] } } }),
@@ -174,20 +177,28 @@ function setup({ size = 1000, maxSize = 5000, sameAsTemplate = false, effectIdOk
 
 const leftovers = (instance) => fs.readdirSync(instance);
 
-test('icon_set copies the prepared PNG into the project icon slot and reloads the editor icon state', () => {
+test('icon_set writes the female and male slots by default and reloads the editor icon state', () => {
   const { lib, calls, projectDir } = setup();
   const png = path.join(tmpdir('xs-png-'), 'i.png');
   fs.writeFileSync(png, 'PNGDATA');
   const out = lib.iconSet({ png_path: png });
-  assert.equal(out.icon_path, path.join(projectDir, 'Icon/commonIcon.png'));
-  assert.equal(fs.readFileSync(out.icon_path, 'utf8'), 'PNGDATA');
-  assert.deepEqual(calls.imported, [[2, projectDir]]);
-  assert.deepEqual(calls.exist, [[2, true]]);
+  assert.deepEqual(out.icon_paths, [path.join(projectDir, 'Icon/femaleIcon.png'), path.join(projectDir, 'Icon/maleIcon.png')]);
+  for (const f of out.icon_paths) assert.equal(fs.readFileSync(f, 'utf8'), 'PNGDATA');
+  assert.deepEqual(calls.imported, [[0, projectDir], [1, projectDir]]);
+  assert.deepEqual(calls.exist, [[0, true], [1, true]]);
   assert.equal(calls.savedJson, 1);
-  assert.deepEqual(out.project_icons, ['common']);
-  lib.iconSet({ png_path: png, type: 'female' });
-  assert.ok(fs.existsSync(path.join(projectDir, 'Icon/femaleIcon.png')));
-  assert.throws(() => lib.iconSet({ png_path: png, type: 'kid' }), /INVALID_ICON_TYPE/);
+  assert.deepEqual(out.project_icons, ['female', 'male']);
+  assert.deepEqual(out.removed, []);
+  const common = lib.iconSet({ png_path: png, types: ['common'] });
+  assert.ok(fs.existsSync(path.join(projectDir, 'Icon/commonIcon.png')));
+  assert.deepEqual(common.removed, ['female', 'male']);
+  assert.deepEqual(common.project_icons, ['common']);
+  assert.deepEqual(calls.iconDeleted, [['dirty', 0], ['delete', 0], ['dirty', 1], ['delete', 1]]);
+  const back = lib.iconSet({ png_path: png });
+  assert.deepEqual(back.removed, ['common']);
+  assert.deepEqual(back.project_icons, ['female', 'male']);
+  assert.throws(() => lib.iconSet({ png_path: png, types: ['kid'] }), /INVALID_ICON_TYPE: kid/);
+  assert.throws(() => lib.iconSet({ png_path: png, types: [] }), /INVALID_ICON_TYPE/);
   assert.throws(() => lib.iconSet({ png_path: '/nope.png' }), /ICON_FILE_NOT_FOUND/);
 });
 
@@ -206,19 +217,18 @@ test('effect_check passes a clean project and removes its scratch export', async
   assert.deepEqual(out.issues, []);
   assert.equal(out.package_bytes, 1000);
   assert.equal(out.package_limit_bytes, 5000);
-  assert.equal(out.min_sdk_version, 'v5');
   assert.deepEqual(out.icons, ['common']);
   assert.ok(calls.exportDirs[0].startsWith(instance));
   assert.deepEqual(leftovers(instance), []);
 });
 
 test('effect_check reports every reason the submit flow would refuse', async () => {
-  const { lib, instance } = setup({ size: 6000, maxSize: 5000, sameAsTemplate: true, effectIdOk: false, loggedIn: false, minSdk: 10, limitSdk: 9 });
+  const { lib, instance } = setup({ size: 6000, maxSize: 5000, sameAsTemplate: true, effectIdOk: false, loggedIn: false });
   const out = await lib.effectCheck();
   assert.equal(out.ok, false);
   assert.deepEqual(
     out.issues.map((i) => i.split(':')[0]),
-    ['PACKAGE_TOO_LARGE', 'TEMPLATE_TAMPERED', 'SAME_AS_TEMPLATE', 'NOT_LOGGED_IN', 'SDK_TOO_NEW', 'NO_ICON'],
+    ['PACKAGE_TOO_LARGE', 'TEMPLATE_TAMPERED', 'SAME_AS_TEMPLATE', 'NOT_LOGGED_IN', 'NO_ICON'],
   );
   assert.deepEqual(leftovers(instance), []);
 });
@@ -260,22 +270,26 @@ test('submit_prepare opens the submit window through the toolbar entry only afte
   assert.deepEqual(good.business.emitted, ['SubmitEffect']);
 });
 
-test('mobile_preview uploads a fresh package with the editor cookie and returns the preview link', async () => {
+test('mobile_preview exports like the toolbar popup and returns the QR text it would show', async () => {
   const { lib, calls, instance } = setup();
   const out = await lib.mobilePreview();
-  assert.equal(out.preview_url, 'https://preview.example/abc');
+  assert.deepEqual(out, { qr_text: JSON.stringify({ id: 'ENC', type: 'studio', ttl: 604800 }), expires_in_sec: 604800, package_bytes: 1000 });
+  assert.equal(calls.sdkMapping, 1);
+  assert.deepEqual(calls.exportOpts[0], { exportName: 'effect', zip: true });
   assert.equal(calls.uploaded.length, 1);
   assert.equal(calls.uploaded[0][1], true, 'package exists while uploading');
   assert.deepEqual(leftovers(instance), []);
-  const none = setup({ mobileResponse: { body: '{"code":1}' } });
-  await assert.rejects(none.lib.mobilePreview(), /MOBILE_PREVIEW_NO_URL/);
-  assert.deepEqual(leftovers(none.instance), []);
+  const moderated = setup({ mobileResponse: { statusCode: 200, body: '{"code":2706,"message":"审核未通过"}' } });
+  await assert.rejects(moderated.lib.mobilePreview(), /MOBILE_PREVIEW_MODERATION_FAILED: 审核未通过/);
+  assert.deepEqual(leftovers(moderated.instance), []);
+  const http = setup({ mobileResponse: { statusCode: 500, body: '' } });
+  await assert.rejects(http.lib.mobilePreview(), /MOBILE_PREVIEW_HTTP_500/);
 });
 
-test('findUrl prefers url-named fields anywhere in the response', () => {
-  assert.equal(findUrl({ data: { cover: 'https://cover', qr_url: 'https://qr' } }), 'https://qr');
-  assert.equal(findUrl({ a: 'x', b: ['https://only'] }), 'https://only');
-  assert.equal(findUrl({ a: 'x' }), null);
+test('effect_check exports with the submit flow options', async () => {
+  const { lib, calls } = setup();
+  await lib.effectCheck();
+  assert.deepEqual(calls.exportOpts[0], { exportName: 'effect', zip: true, extra: { treeShakeIEJs: true, exportRemoteAssetJson: true } });
 });
 
 test('tasks_list slims tasks and prepares the launch extras only for received ones', async (t) => {
@@ -390,12 +404,12 @@ test('icon_set prepares the image, hands the PNG to the plugin and always remove
     },
     callPlugin: async (method, params, opts) => {
       seen.push({ method, params, opts });
-      if (params.type === 'male') throw Error('boom');
+      if (params.types[0] === 'male') throw Error('boom');
       return { ok: true };
     },
   });
   await client.callTool({ name: 'icon_set', arguments: { project_path: '/p', image_path: '/img.jpg' } });
-  assert.deepEqual(seen[0], { method: 'icon_set', params: { png_path: path.join(dir, 'icon.png') }, opts: { projectPath: '/p' } });
+  assert.deepEqual(seen[0], { method: 'icon_set', params: { png_path: path.join(dir, 'icon.png'), types: ['female', 'male'] }, opts: { projectPath: '/p' } });
   assert.equal(fs.existsSync(dir), false);
   const failed = await client.callTool({ name: 'icon_set', arguments: { project_path: '/p', image_path: '/img.jpg', type: 'male' } });
   assert.equal(failed.isError, true);
@@ -412,21 +426,21 @@ test('effect_check runs the cloud check only when asked, with a longer RPC timeo
   assert.deepEqual(seen[2], ['effect_check_cloud', { timeout_ms: 60000 }, 90000]);
 });
 
-test('mobile_preview returns the link and a QR code image of it', async () => {
+test('mobile_preview returns the QR image of the text the editor would encode', async () => {
   const qr = [];
   const client = await connect({
-    callPlugin: async () => ({ preview_url: 'https://preview/x', package_bytes: 5, response: { code: 0 } }),
-    qrPng: async (url) => (qr.push(url), Buffer.from('89504e470d0a1a0a00', 'hex')),
+    callPlugin: async () => ({ qr_text: '{"id":"ENC"}', expires_in_sec: 604800, package_bytes: 5 }),
+    qrPng: async (t) => (qr.push(t), Buffer.from('89504e470d0a1a0a00', 'hex')),
   });
   const res = await client.callTool({ name: 'mobile_preview', arguments: {} });
-  assert.equal(json(res).preview_url, 'https://preview/x');
+  assert.equal(json(res).expires_in_sec, 604800);
   assert.equal(res.content[1].type, 'image');
   assert.equal(res.content[1].mimeType, 'image/png');
-  assert.deepEqual(qr, ['https://preview/x']);
+  assert.deepEqual(qr, ['{"id":"ENC"}']);
 });
 
 test('the real QR helper renders a PNG', async () => {
-  const client = await connect({ callPlugin: async () => ({ preview_url: 'https://preview/x', package_bytes: 5, response: {} }) });
+  const client = await connect({ callPlugin: async () => ({ qr_text: '{"id":"ENC","type":"studio","ttl":604800}', expires_in_sec: 604800, package_bytes: 5 }) });
   const res = await client.callTool({ name: 'mobile_preview', arguments: {} });
   assert.equal(sniffImage(Buffer.from(res.content[1].data, 'base64')), 'image/png');
 });

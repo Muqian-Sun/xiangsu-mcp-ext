@@ -32,7 +32,6 @@ const M = {
   perfTest: '@orion/Business/PerfTest/PerfTestExtension',
   events: '@orion/Business/Event/BusinessEventManager',
   login: '@orion/Business/Login/LoginContribution',
-  sdkLimit: '@orion/Business/Utils/utils',
   remoteAssets: '@orion/Business/RemoteAsset/RemoteAssetManager',
   mobilePreview: '@orion/Business/EditWindow/ToolBar/MobilePreview/backendHelper',
   urls: '@orion/Business/BusinessCommon/UrlConst',
@@ -51,16 +50,19 @@ function scratchDir(lib, kind) {
   return fs.mkdtempSync(path.join(base, `xiangsu-mcp-ext-${kind}-`));
 }
 
-// Same exporter call the submit flow makes (exportEffectPackageForSubmit), into a scratch folder; the
-// size rule for remote assets is the submit flow's too.
-async function exportEffectPackage(lib, dir) {
+// Export options of the two flows this plugin mirrors: the submit flow (exportEffectPackageForSubmit)
+// and the toolbar's phone preview (MobilePreviewPopupContent).
+const EXPORT_OPTIONS = {
+  submit: { exportName: 'effect', zip: true, extra: { treeShakeIEJs: true, exportRemoteAssetJson: true } },
+  preview: { exportName: 'effect', zip: true },
+};
+
+// Exports the effect package into a scratch folder; the size rule for remote assets is the submit
+// flow's.
+async function exportEffectPackage(lib, dir, flow = 'submit') {
   const project = lib.mod(M.ef).ProjectManager.getInstance().getActiveProject();
   if (!project) throw Error('NO_ACTIVE_PROJECT');
-  const res = await project.effectExporter.exportEffectPackage(project.sceneManager.mainScene, dir, {
-    exportName: 'effect',
-    zip: true,
-    extra: { treeShakeIEJs: true, exportRemoteAssetJson: true },
-  });
+  const res = await project.effectExporter.exportEffectPackage(project.sceneManager.mainScene, dir, EXPORT_OPTIONS[flow]);
   const packagePath = res && res.packagePath;
   if (!packagePath || !fs.existsSync(packagePath)) throw Error(`EXPORT_FAILED: ${JSON.stringify(res && Object.keys(res))}`);
   let size = fs.statSync(packagePath).size;

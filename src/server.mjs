@@ -62,7 +62,7 @@ export function createServer(deps = {}) {
     readImageFile,
     openWithApp,
     prepareIcon,
-    qrPng: (url) => QRCode.toBuffer(url, { width: 360, margin: 2 }),
+    qrPng: (text) => QRCode.toBuffer(text, { width: 360, margin: 2 }),
     sleep,
     openTimeoutMs: 90000,
     closeTimeoutMs: 30000,
@@ -309,18 +309,18 @@ export function createServer(deps = {}) {
     {
       name: 'icon_set',
       description:
-        '设置特效图标（提交特效必需）：把一张图片居中裁成正方形、缩放到 360×360 PNG，写进工程的 Icon/ 目录（与「图标制作」窗口保存的同一文件），并让编辑器重新读取。图片可以来自 generate_image 生成的资源，或 capture_preview 截图另存的文件。type：common 通用（默认），female / male 为男女分版。之后 save_project 落盘。',
+        '设置特效图标（提交特效必需）：把一张图片居中裁成正方形、缩放到 360×360 PNG，写进工程的 Icon/ 目录（与「图标制作」窗口保存的同一批文件），并让编辑器重新读取。默认女性、男性两个图标位都用这张图（提交窗口要这两个）。图片可以来自 generate_image 生成的资源，或 capture_preview 截图另存的文件。之后 save_project 落盘。',
       shape: {
         ...target,
         image_path: z.string().min(1).describe('图片的绝对路径（png / jpg / webp 等 sips 能读的格式）。'),
-        type: z.enum(['common', 'female', 'male']).optional().describe('图标类型，默认 common。'),
+        type: z.enum(['both', 'female', 'male', 'common']).optional().describe('写哪个图标位：both（默认，女性和男性两个位都用这张图，提交窗口要的就是这两个）、female、male，或 common 通用。'),
       },
       run: async (a) => {
-        const { project_path, instance_id, image_path, type } = a;
+        const { project_path, instance_id, image_path, type = 'both' } = a;
         const projectPath = await projects.resolveProjectPath({ project_path, instance_id });
         const { png, dir } = await d.prepareIcon(image_path);
         try {
-          return text(await d.callPlugin('icon_set', { png_path: png, ...(type ? { type } : {}) }, { projectPath }));
+          return text(await d.callPlugin('icon_set', { png_path: png, types: type === 'both' ? ['female', 'male'] : [type] }, { projectPath }));
         } finally {
           fs.rmSync(dir, { recursive: true, force: true });
         }
@@ -335,7 +335,7 @@ export function createServer(deps = {}) {
     {
       name: 'effect_check',
       description:
-        '提交前的特效检测。默认只做本地检查、不上传：按提交流程打包并比对包体上限，检查是否原样套用模板（编辑器会拒收与模板资源相同的工程）、登录状态、最低 SDK 版本、是否已有图标，返回 ok 和 issues。cloud=true 时再打开编辑器的「特效检测」窗口做云端性能检测（会把特效包上传到抖音做测试，不是发布），等待结果 passed / not_passed / needs_optimization / failed，详情留在该窗口里。',
+        '提交前的特效检测。默认只做本地检查、不上传：按提交流程打包并比对包体上限，检查是否原样套用模板（编辑器会拒收与模板资源相同的工程）、登录状态、是否已有图标，返回 ok 和 issues。cloud=true 时再打开编辑器的「特效检测」窗口做云端性能检测（会把特效包上传到抖音做测试，不是发布），等待结果 passed / not_passed / needs_optimization / failed，详情留在该窗口里。',
       shape: {
         ...target,
         cloud: z.boolean().optional().describe('同时做云端检测，默认 false。'),
@@ -363,15 +363,15 @@ export function createServer(deps = {}) {
     {
       name: 'mobile_preview',
       description:
-        '手机预览：按手机预览的方式打包当前工程，上传到抖音的预览服务（与工具栏「手机预览」相同），返回预览链接和二维码图片，用抖音 App 扫码即可在真机上看效果。会把特效包上传到抖音服务器。',
+        '手机预览：按工具栏「手机预览」的方式打包当前工程并上传到抖音的预览服务，返回和编辑器弹出的一样的二维码图片（及其文本、有效期），用抖音 App 扫码即可在真机上看效果。会把特效包上传到抖音服务器；内容审核不通过时报 MOBILE_PREVIEW_MODERATION_FAILED。',
       shape: { ...target },
       run: async (a) => {
         const projectPath = await projects.resolveProjectPath(a);
         const res = await d.callPlugin('mobile_preview', {}, { projectPath, timeoutMs: 300000 });
-        const png = await d.qrPng(res.preview_url);
+        const png = await d.qrPng(res.qr_text);
         return {
           content: [
-            { type: 'text', text: JSON.stringify({ preview_url: res.preview_url, package_bytes: res.package_bytes, response: res.response }, null, 2) },
+            { type: 'text', text: JSON.stringify(res, null, 2) },
             { type: 'image', data: png.toString('base64'), mimeType: 'image/png' },
           ],
         };

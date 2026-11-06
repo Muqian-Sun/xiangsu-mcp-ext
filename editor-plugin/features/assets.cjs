@@ -54,6 +54,9 @@ const REQUIRED = {
     [M.iconPreview, 'IconPreviewManager.prototype.importAndCreateIcon'],
     [M.iconPreview, 'IconPreviewManager.prototype.setIconExistState'],
     [M.iconPreview, 'IconPreviewManager.prototype.saveIconJson'],
+    [M.iconPreview, 'IconPreviewManager.prototype.isIconCreated'],
+    [M.iconPreview, 'IconPreviewManager.prototype.deleteIcon'],
+    [M.iconPreview, 'IconPreviewManager.prototype.uploadDeleteIcon'],
     [M.iconWindow, 'showIconCreationWindow'],
   ],
   check: [
@@ -62,9 +65,7 @@ const REQUIRED = {
     [M.perfTest, 'PerfTestAPIKey'],
     [M.events, 'BusinessEventManager.TypeGuard'],
     [M.login, 'loginContribution.getLoginStatus'],
-    [M.sdkLimit, 'getLimitSdkVersionInfo'],
     [M.remoteAssets, 'RemoteAssetManager.getInstance'],
-    [M.ef, 'EffectExport.ExportType.MOBILE_PREVIEW'],
     [M.ef, 'Resource.EditorFoundation.env.getInstancePath'],
   ],
   submit: [
@@ -74,6 +75,7 @@ const REQUIRED = {
   mobile: [
     [M.mobilePreview, 'getCookie'],
     [M.mobilePreview, 'requestMobilePreviewURL'],
+    [M.bizUtils, 'ExportEffectPackageUtils.registerSDKVersionMapping'],
     [M.remoteAssets, 'RemoteAssetManager.getInstance'],
   ],
   community: [
