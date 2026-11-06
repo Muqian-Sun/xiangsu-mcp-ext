@@ -7,7 +7,7 @@ import crypto from 'node:crypto';
 import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
-const { Library, M } = require('../editor-plugin/library.cjs');
+const { Library, M, REQUIRED } = require('../editor-plugin/library.cjs');
 
 const PKG_BYTES = Buffer.from('fake ehpackage bytes');
 const PKG_MD5 = crypto.createHash('md5').update(PKG_BYTES).digest('hex');
@@ -105,7 +105,7 @@ function setup({ listItems = [item('111', '芒果脸', undefined)], listStatus =
     if (!(name in modules)) throw Error(`MODULE_NOT_FOUND: ${name}`);
     return modules[name];
   };
-  return { lib: new Library(mod), calls, shared };
+  return { lib: new Library(mod), calls, shared, modules };
 }
 
 test('nav exposes only applicable leaf panels', () => {
@@ -200,4 +200,40 @@ test('apply refuses without an active project', async () => {
   await lib.list({ panel_key: '3d_distortion' });
   await assert.rejects(lib.apply({ template_id: '111' }), /NO_ACTIVE_PROJECT/);
   assert.equal(calls.download, 0);
+});
+
+test('self check passes when every required editor internal exists', () => {
+  const { lib } = setup();
+  assert.deepEqual(lib.selfCheck(), { ok: true, missing: [] });
+  assert.ok(REQUIRED.length >= 10);
+});
+
+test('self check names the missing internal and library calls refuse to run', async () => {
+  const { lib, modules } = setup();
+  delete modules[M.util].downloadLokiFile;
+  delete modules[M.ef].Resource.AssetPackageManager.instance.import;
+  const check = lib.selfCheck();
+  assert.equal(check.ok, false);
+  assert.deepEqual(check.missing, [`${M.util} :: downloadLokiFile`, `${M.ef} :: Resource.AssetPackageManager.instance.import`]);
+  assert.throws(() => lib.nav(), /INCOMPATIBLE_EDITOR: missing .*downloadLokiFile/);
+  await assert.rejects(lib.list({ panel_key: '3d_distortion' }), /INCOMPATIBLE_EDITOR/);
+  await assert.rejects(lib.search({ query: 'x' }), /INCOMPATIBLE_EDITOR/);
+  await assert.rejects(lib.apply({ template_id: '111' }), /INCOMPATIBLE_EDITOR/);
+});
+
+test('self check reports a module that is gone entirely', () => {
+  const { lib, modules } = setup();
+  delete modules[M.scene];
+  const check = lib.selfCheck();
+  assert.equal(check.ok, false);
+  assert.match(check.missing.join('\n'), /Common\/Scene :: SceneModule.getEditingSceneService \(MODULE_NOT_FOUND/);
+});
+
+test('covers returns cover urls for known templates and validates input', async () => {
+  const { lib } = setup();
+  assert.throws(() => lib.covers({ template_ids: ['111'] }), /UNKNOWN_TEMPLATE: 111/);
+  await lib.list({ panel_key: '3d_distortion' });
+  assert.deepEqual(lib.covers({ template_ids: ['111'] }), [{ template_id: '111', title: '芒果脸', cover_url: 'https://cdn/111.png' }]);
+  assert.throws(() => lib.covers({ template_ids: [] }), /INVALID_TEMPLATE_IDS/);
+  assert.throws(() => lib.covers({ template_ids: Array(9).fill('111') }), /INVALID_TEMPLATE_IDS/);
 });

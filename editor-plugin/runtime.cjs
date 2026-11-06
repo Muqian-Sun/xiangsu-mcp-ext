@@ -103,30 +103,42 @@ class Runtime {
     this.token = crypto.randomBytes(24).toString('hex');
     this.server = null;
     this.stateFile = path.join(INSTANCE_DIR, `${process.pid}.json`);
-    this.loadLibrary();
-    this.methods = {
-      status: () => this.status(),
-      library_nav: () => this.library.nav(),
-      library_list: (p) => this.library.list(p),
-      library_search: (p) => this.library.search(p),
-      library_apply: (p) => this.library.apply(p),
-    };
+    this.libraryMtime = 0;
+    this.refreshLibrary();
+    this.methods = { status: () => this.status() };
     if (this.config.devEval) {
       Object.assign(this.methods, {
         describe: ({ module, depth = 1 }) => snapshot(requireModule(module), depth),
         eval: ({ code, depth = 2 }) => this.evaluate(code, depth),
-        reload: () => {
-          delete require.cache[LIBRARY_PATH];
-          this.loadLibrary();
-          return { reloaded: LIBRARY_PATH };
-        },
       });
     }
   }
 
-  loadLibrary() {
-    const { Library } = require(LIBRARY_PATH);
-    this.library = new Library(requireModule);
+  // Reloads library.cjs when it changed on disk; a broken edit keeps the previous version running.
+  refreshLibrary() {
+    const mtime = fs.statSync(LIBRARY_PATH).mtimeMs;
+    if (this.library && mtime === this.libraryMtime) return;
+    delete require.cache[LIBRARY_PATH];
+    let mod;
+    try {
+      mod = require(LIBRARY_PATH);
+    } catch (e) {
+      log('library reload failed', e && e.stack);
+      if (!this.library) throw e;
+      throw Error(`LIBRARY_RELOAD_FAILED: ${e.message}`);
+    }
+    this.library = new mod.Library(requireModule);
+    this.libraryMethods = mod.METHODS;
+    this.libraryMtime = mtime;
+    const check = this.library.selfCheck();
+    log('library loaded', JSON.stringify(check));
+  }
+
+  resolve(method) {
+    if (Object.prototype.hasOwnProperty.call(this.methods, method)) return this.methods[method];
+    this.refreshLibrary();
+    const name = Object.prototype.hasOwnProperty.call(this.libraryMethods, method) ? this.libraryMethods[method] : null;
+    return name ? (p) => this.library[name](p) : null;
   }
 
   status() {
@@ -136,7 +148,7 @@ class Runtime {
       projectPath: p?.path || null,
       hasOrion: !!orion(),
       devEval: !!this.config.devEval,
-      methods: Object.keys(this.methods),
+      methods: [...Object.keys(this.methods), ...Object.keys(this.libraryMethods)],
     };
   }
 
@@ -194,9 +206,9 @@ class Runtime {
       } catch (e) {
         return send(400, { ok: false, error: 'invalid json' });
       }
-      const fn = this.methods[body.method];
-      if (!fn) return send(400, { ok: false, error: `unknown method: ${body.method}` });
       try {
+        const fn = this.resolve(body.method);
+        if (!fn) return send(400, { ok: false, error: `unknown method: ${body.method}` });
         const value = await fn(body.params || {});
         send(200, { ok: true, value });
       } catch (e) {

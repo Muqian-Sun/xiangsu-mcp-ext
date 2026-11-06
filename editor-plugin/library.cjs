@@ -16,6 +16,25 @@ const M = {
   scene: '@orion/Business/Common/Scene',
 };
 
+// Editor internals this module relies on; checked up front so an editor upgrade fails with a precise list.
+const REQUIRED = [
+  [M.nav, 'getDefaultNavList'],
+  [M.navConst, 'SearchNavItemKeys'],
+  [M.category, 'getAssetCategory'],
+  [M.list, 'getAssetList'],
+  [M.search, 'searchAsset'],
+  [M.util, 'downloadLokiFile'],
+  [M.ef, 'Resource.EditorFoundation.env.getSharedResourcesPath'],
+  [M.ef, 'Resource.AssetPackageManager.instance.import'],
+  [M.ef, 'Resource.ResourceUndoManager.createImportUndoID'],
+  [M.ef, 'ProjectManager.getInstance'],
+  [M.ef, 'PreviewSyncer.getInstance'],
+  [M.ef, 'UndoSystem.instance.start'],
+  [M.ef, 'UndoSystem.instance.end'],
+  [M.scene, 'SceneModule.getEditingSceneService'],
+];
+const MAX_PREVIEW = 8;
+
 // Only plain asset lists can be applied; AI generation panels (妆容/图片/视频/实时变脸 UGC) cost quota
 // and use a different flow, so they are not exposed.
 const APPLICABLE_TYPE = 'GeneralAssetsList';
@@ -48,6 +67,37 @@ class Library {
     this.applying = false;
   }
 
+  selfCheck() {
+    const missing = [];
+    for (const [name, prop] of REQUIRED) {
+      try {
+        let v = this.mod(name);
+        for (const k of prop.split('.')) v = v == null ? undefined : v[k];
+        if (v == null) missing.push(`${name} :: ${prop}`);
+      } catch (e) {
+        missing.push(`${name} :: ${prop} (${e.message})`);
+      }
+    }
+    return { ok: missing.length === 0, missing };
+  }
+
+  ensureCompatible() {
+    const { ok, missing } = this.selfCheck();
+    if (!ok) throw Error(`INCOMPATIBLE_EDITOR: missing ${missing.join('; ')}`);
+  }
+
+  covers({ template_ids }) {
+    if (!Array.isArray(template_ids) || !template_ids.length || template_ids.length > MAX_PREVIEW) {
+      throw Error(`INVALID_TEMPLATE_IDS: pass 1-${MAX_PREVIEW} template ids`);
+    }
+    return template_ids.map((id) => {
+      const it = this.items.get(String(id));
+      if (!it) throw Error(`UNKNOWN_TEMPLATE: ${id}; call library_list or library_search first`);
+      const s = slim(it);
+      return { template_id: s.template_id, title: s.title, cover_url: s.cover_url };
+    });
+  }
+
   remember(items) {
     for (const it of items) if (it && it.templateId) this.items.set(String(it.templateId), it);
     return items.map(slim);
@@ -70,10 +120,12 @@ class Library {
   }
 
   nav() {
+    this.ensureCompatible();
     return { panels: this.navEntries().filter((e) => e.applicable) };
   }
 
   async list({ panel_key, category_id, cursor = 0, count = 30 }) {
+    this.ensureCompatible();
     const valid = this.nav().panels.map((p) => p.panel_key);
     if (!valid.includes(panel_key)) throw Error(`INVALID_PANEL_KEY: ${panel_key}; valid: ${valid.join(', ')}`);
     const catData = body(await this.mod(M.category).getAssetCategory({ cursor: 0, count: 50, panelKey: panel_key }), 'GET_CATEGORY');
@@ -88,6 +140,7 @@ class Library {
   }
 
   async search({ query }) {
+    this.ensureCompatible();
     if (typeof query !== 'string' || !query.trim()) throw Error('INVALID_QUERY: query must be a non-empty string');
     const groups = this.mod(M.navConst).SearchNavItemKeys;
     const applicable = new Set(this.nav().panels.map((p) => p.panel_key));
@@ -127,6 +180,7 @@ class Library {
   }
 
   async apply({ template_id, auto_instantiate = true }) {
+    this.ensureCompatible();
     const item = this.items.get(String(template_id));
     if (!item) throw Error(`UNKNOWN_TEMPLATE: ${template_id}; call library_list or library_search first`);
     const EF = this.mod(M.ef);
@@ -172,4 +226,15 @@ class Library {
   }
 }
 
-module.exports = { Library, slim, M };
+// RPC method name -> Library method. The runtime dispatches through this table, so adding a method
+// here takes effect without reopening editor windows.
+const METHODS = {
+  self_check: 'selfCheck',
+  library_nav: 'nav',
+  library_list: 'list',
+  library_search: 'search',
+  library_covers: 'covers',
+  library_apply: 'apply',
+};
+
+module.exports = { Library, slim, M, REQUIRED, MAX_PREVIEW, METHODS };
