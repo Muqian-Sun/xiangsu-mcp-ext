@@ -371,7 +371,7 @@ test('music lists a category or a search and applies a track with a clip range',
   await assert.rejects(lib.musicApply({ item: { id: 99, duration: 3 } }), /MUSIC_APPLY_FAILED/);
 });
 
-test('prepareIcon centre-crops to a square, scales to the icon size and cleans up on failure', async () => {
+test('prepareIcon centre-crops to a square, scales to the icon size and cleans up on failure', async (t) => {
   const src = path.join(tmpdir('xs-src-'), 'a.jpg');
   fs.writeFileSync(src, 'x');
   const runs = [];
@@ -382,10 +382,10 @@ test('prepareIcon centre-crops to a square, scales to the icon size and cleans u
     return { stdout: '' };
   };
   const { png, dir } = await prepareIcon(src, { exec });
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   assert.deepEqual(runs[1].slice(0, 6), ['-s', 'format', 'png', '--cropToHeightWidth', '354', '354']);
   assert.deepEqual(runs[2].slice(0, 3), ['-z', String(ICON_SIZE), String(ICON_SIZE)]);
   assert.equal(sniffImage(fs.readFileSync(png)), 'image/png');
-  fs.rmSync(dir, { recursive: true });
   await assert.rejects(prepareIcon('relative.png', { exec }), /IMAGE_NOT_FOUND/);
   await assert.rejects(prepareIcon(src, { exec: async () => ({ stdout: '' }) }), /NOT_AN_IMAGE/);
   let failedDir;
