@@ -27,6 +27,11 @@ const OWN = [
   'project_new',
   'project_open',
   'resource_delete_unused',
+  'works_download',
+  'works_list',
+  'works_nav',
+  'works_preview',
+  'works_search',
 ];
 
 function fakeOfficial({ tools = [{ name: 'get_scene', description: 'official', inputSchema: { type: 'object' } }], call } = {}) {

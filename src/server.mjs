@@ -12,8 +12,9 @@ import { callPlugin, listInstances } from './bridge.mjs';
 import { OfficialMcp } from './official.mjs';
 import { fetchImage, readImageFile } from './images.mjs';
 import { Projects, openWithApp } from './projects.mjs';
+import { checkTarget, copyProject, outlineProject } from './works.mjs';
 
-const VERSION = '0.2.0';
+const VERSION = '0.3.0';
 
 const target = {
   project_path: z.string().optional().describe('目标工程的绝对路径。与 instance_id 二选一；只开了一个工程窗口时都可省略。'),
@@ -55,6 +56,25 @@ export function createServer(deps = {}) {
     const { project_path, instance_id, ...params } = args;
     const projectPath = await projects.resolveProjectPath({ project_path, instance_id });
     return text(await d.callPlugin(method, params, { projectPath, timeoutMs }));
+  };
+
+  // Homepage works do not depend on the project, so any window serves them; without a target the
+  // lowest pid is used so works_list and a later works_download hit the same window.
+  const homeWindow = async ({ project_path, instance_id }) => {
+    if (project_path !== undefined || instance_id !== undefined) return { projectPath: await projects.resolveProjectPath({ project_path, instance_id }) };
+    const pids = d.listInstances().map((s) => s.pid).sort((a, b) => a - b);
+    if (!pids.length) throw Error('NO_EDITOR_WINDOW: open any project window first (works are served by the XiangsuMcpExt plugin inside it)');
+    return { pid: pids[0] };
+  };
+  const works = (method) => async (args) => {
+    const { project_path, instance_id, ...params } = args;
+    return text(await d.callPlugin(method, params, await homeWindow({ project_path, instance_id })));
+  };
+  const workPage = {
+    category_id: z.string().optional().describe('works_nav 返回的分类 ID；省略时用第一个分类（推荐）。'),
+    cursor: z.number().int().min(0).optional().describe('翻页游标，取上一页的 next_cursor。'),
+    count: z.number().int().min(1).max(100).optional().describe('每页数量，默认 30。'),
+    sort: z.enum(['suggest', 'latest', 'effect_usage', 'project_usage']).optional().describe('排序：suggest 推荐（默认）、latest 最新、effect_usage 特效使用量、project_usage 工程使用量。'),
   };
 
   const tools = [
@@ -145,6 +165,61 @@ export function createServer(deps = {}) {
         auto_instantiate: z.boolean().optional().describe('是否放进场景，默认 true；false 时只导入资源面板。'),
       },
       run: plugin('library_apply', 180000),
+    },
+    {
+      name: 'works_nav',
+      description: '列出像塑首页「模板」里的作品分类（推荐、官方工程、新手必做、游戏、妆容、AI玩法等）和可用排序。首页作品是完整的像塑工程（官方工程和用户投稿），可下载到本地阅读、学习其场景和脚本做法。任意一个工程窗口开着即可。',
+      shape: { ...target },
+      run: works('works_nav'),
+    },
+    {
+      name: 'works_list',
+      description: '分页列出首页某个分类下的作品：template_id、标题、标签、已发布到抖音的特效 ID 和发布量（effect_id / publish_count，没有则为 null）、使用量、工程包大小、封面。拿到 template_id 后用 works_preview 看封面、works_download 下载工程。',
+      shape: { ...target, ...workPage },
+      run: works('works_list'),
+    },
+    {
+      name: 'works_search',
+      description: '按作品名搜索首页作品（与首页搜索框同一个接口，限定在一个分类内，默认推荐）。返回字段同 works_list。',
+      shape: { ...target, query: z.string().min(1).describe('作品名关键词，如「合掌」「转场」「换装」。'), ...workPage },
+      run: works('works_search'),
+    },
+    {
+      name: 'works_preview',
+      description: '查看首页作品的封面（animated=true 时看动图），一次最多 8 个，template_id 须来自本会话的 works_list / works_search。',
+      shape: {
+        ...target,
+        template_ids: z.array(z.string()).min(1).max(8).describe('要看的作品 template_id。'),
+        animated: z.boolean().optional().describe('看动图（gif）而不是静态封面，默认 false；动图较大。'),
+      },
+      run: async (a) => {
+        const { project_path, instance_id, template_ids, animated = false } = a;
+        const rows = await d.callPlugin('works_covers', { template_ids }, await homeWindow({ project_path, instance_id }));
+        const content = [];
+        for (const r of rows) {
+          const url = (animated && r.gif_url) || r.cover_url || r.gif_url;
+          content.push({ type: 'text', text: `${r.title}（template_id ${r.template_id}）` });
+          content.push(url ? await imageContent(d, { url }) : { type: 'text', text: '无封面图' });
+        }
+        return { content };
+      },
+    },
+    {
+      name: 'works_download',
+      description:
+        '下载一个首页作品的完整工程并解压（与在首页点开作品同一流程，但不打开窗口），返回工程目录和文件清单（files 列出相对路径和大小，可直接读取 effect.dyehpj、Assets 下的场景、Graph 下的脚本等来学习做法）。dest 给定时把工程复制到该目录（须不存在或为空，跳过 Library 缓存）作为参考副本；要在编辑器里看效果，用 project_open 打开返回的 project_path。作品版权归原作者，只用于学习参考。',
+      shape: {
+        ...target,
+        template_id: z.string().describe('works_list / works_search 返回的 template_id。'),
+        dest: z.string().optional().describe('参考副本的目标文件夹绝对路径（须不存在或为空）；省略时只留在像塑的临时目录。'),
+      },
+      run: async (a) => {
+        const { project_path, instance_id, template_id, dest } = a;
+        if (dest !== undefined) checkTarget(dest);
+        const got = await d.callPlugin('works_download', { template_id }, { ...(await homeWindow({ project_path, instance_id })), timeoutMs: 600000 });
+        const root = dest ? copyProject(got.project_path, dest) : got.project_path;
+        return text({ template_id: got.template_id, title: got.title, project_path: root, editor_copy: got.project_path, package_path: got.package_path, outline: outlineProject(root) });
+      },
     },
     {
       name: 'menu_list',

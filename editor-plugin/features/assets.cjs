@@ -37,6 +37,13 @@ const REQUIRED = {
     [M.ipc, 'OpenProjectFromHomeCommand'],
     [M.sender, 'EditSender.getInstance'],
   ],
+  works: [
+    [M.worksPanel, 'apiTemplatesPanel'],
+    [M.worksCategory, 'apiTemplatesCategory'],
+    [M.worksCategory, 'apiSearchTemplatesCategory'],
+    [M.worksUtil, 'transformTemplate'],
+    [M.worksDownload, 'DownloadTemplateModel.prototype.startDownload'],
+  ],
 };
 const MAX_PREVIEW = 8;
 
@@ -63,6 +70,7 @@ class Library {
   constructor(mod) {
     this.mod = mod;
     this.items = new Map();
+    this.works = new Map();
     this.applying = false;
   }
 

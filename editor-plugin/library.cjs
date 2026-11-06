@@ -17,10 +17,11 @@ const menu = require('./features/menu.cjs');
 const facewarp = require('./features/facewarp.cjs');
 const project = require('./features/project.cjs');
 const cleanup = require('./features/cleanup.cjs');
+const works = require('./features/works.cjs');
 const dev = require('./features/dev.cjs');
 
 const { Library } = assets;
-const features = [menu, facewarp, project, cleanup, dev];
+const features = [menu, facewarp, project, cleanup, works, dev];
 for (const f of features) Object.assign(Library.prototype, f.methods);
 
 // RPC method name -> Library method; the runtime dispatches through this table.
@@ -35,5 +36,6 @@ module.exports = {
   REQUIRED: assets.REQUIRED,
   MAX_PREVIEW: assets.MAX_PREVIEW,
   MENU_DENY: menu.MENU_DENY,
+  WORK_SORTS: works.SORT,
   CONFIG_PATH: dev.CONFIG_PATH,
 };
