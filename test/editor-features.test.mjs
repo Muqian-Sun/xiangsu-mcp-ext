@@ -299,6 +299,17 @@ test('project_launch asks the home process to open or create, validating the tar
   assert.deepEqual({ ...calls.launched.at(-1) }, { op: 'openTemplate', p: projectDir, extra: { enter_method: 'xiangsu_mcp_ext', template_id: '77' } });
 });
 
+test('project_launch passes task activity fields as launch extras and validates them', async () => {
+  const { lib, calls, projectDir } = setup();
+  fs.writeFileSync(path.join(projectDir, 'effect.dyehpj'), '{}');
+  const activity = { activity_id: 'D2', activity_name: '任务', activity_enter_from: 'homepage', activity_type: 'normal', task_type: 'Normal' };
+  await lib.projectLaunch({ operation: 'openLocal', path: projectDir, activity });
+  assert.deepEqual(calls.launched.at(-1).extra, { ...activity, enter_method: 'activity' });
+  await assert.rejects(lib.projectLaunch({ operation: 'openLocal', path: projectDir, activity: { activity_name: 'x' } }), /INVALID_ACTIVITY/);
+  await assert.rejects(lib.projectLaunch({ operation: 'openLocal', path: projectDir, activity: { ...activity, evil: 1 } }), /INVALID_ACTIVITY/);
+  assert.equal(calls.launched.length, 1);
+});
+
 test('project_launch refuses when every project window allowed is in use', async () => {
   const { lib, calls, projectDir, processes } = setup();
   fs.writeFileSync(path.join(projectDir, 'effect.dyehpj'), '{}');

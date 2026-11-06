@@ -22,7 +22,10 @@ const methods = {
 
   // The home process decides which window hosts the project (a new one, or an idle editor process);
   // the project in this window is never replaced.
-  async projectLaunch({ operation, path: projectPath, template_id }) {
+  // `activity` (activity_id, activity_name, activity_enter_from, activity_type, task_type) is what the
+  // task detail window passes; the editor writes it into the project once it has loaded, which is the
+  // only way a project gets bound to a task.
+  async projectLaunch({ operation, path: projectPath, template_id, activity }) {
     this.ensureCompatible('project');
     if (!OPERATIONS.has(operation)) throw Error(`INVALID_OPERATION: ${operation}; expected ${[...OPERATIONS].join(', ')}`);
     const withPath = operation !== 'createNew';
@@ -32,6 +35,11 @@ const methods = {
     }
     const extra = { enter_method: 'xiangsu_mcp_ext' };
     if (operation === 'openTemplate' && template_id !== undefined) extra.template_id = String(template_id);
+    if (activity !== undefined) {
+      const keys = ['activity_id', 'activity_name', 'activity_enter_from', 'activity_type', 'task_type'];
+      if (!activity || !activity.activity_id || Object.keys(activity).some((k) => !keys.includes(k))) throw Error(`INVALID_ACTIVITY: expected ${keys.join(', ')} with an activity_id`);
+      Object.assign(extra, activity, { enter_method: 'activity' });
+    }
     const { OpenProjectFromHomeCommand, GetProjectProcessStatusCommand } = this.mod(M.ipc);
     const sender = this.mod(M.sender).EditSender.getInstance();
     // The home process caps project windows; at the cap it only shows a warning dialog and never opens,

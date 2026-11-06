@@ -48,6 +48,52 @@ const REQUIRED = {
     [M.worksDownload, 'DownloadTemplateModel.prototype.startDownload'],
     [M.worksDownload, 'DownloadTemplateModel.prototype.getTemplateProjectPath'],
   ],
+  icon: [
+    [M.iconPreview, 'iconTypeToProjectIconPathMap'],
+    [M.iconPreview, 'IconPreviewManager.getInstance'],
+    [M.iconPreview, 'IconPreviewManager.prototype.importAndCreateIcon'],
+    [M.iconPreview, 'IconPreviewManager.prototype.setIconExistState'],
+    [M.iconPreview, 'IconPreviewManager.prototype.saveIconJson'],
+    [M.iconWindow, 'showIconCreationWindow'],
+  ],
+  check: [
+    [M.orionui, 'ExtensionManager.host.getAPI'],
+    [M.submission, 'EffectSubmissionAPIKey'],
+    [M.perfTest, 'PerfTestAPIKey'],
+    [M.events, 'BusinessEventManager.TypeGuard'],
+    [M.login, 'loginContribution.getLoginStatus'],
+    [M.sdkLimit, 'getLimitSdkVersionInfo'],
+    [M.remoteAssets, 'RemoteAssetManager.getInstance'],
+    [M.ef, 'EffectExport.ExportType.MOBILE_PREVIEW'],
+    [M.ef, 'Resource.EditorFoundation.env.getInstancePath'],
+  ],
+  submit: [
+    [M.events, 'BusinessEventManager.TypeGuard'],
+    [M.ef, 'EventManager_deprecated.TypeGuard'],
+  ],
+  mobile: [
+    [M.mobilePreview, 'getCookie'],
+    [M.mobilePreview, 'requestMobilePreviewURL'],
+    [M.remoteAssets, 'RemoteAssetManager.getInstance'],
+  ],
+  community: [
+    [M.urls, 'Domain.kBackendApiURL'],
+    [M.urls, 'DomainPath.kActivityAPI'],
+    [M.urls, 'DomainPath.kTaskListAPI'],
+    [M.bizUtils, 'PlatformUtils.genSignData'],
+    [M.bizUtils, 'UserAgentUtils.userAgentGenerator'],
+    [M.orionui, 'CookieManager'],
+    [M.activityTypes, 'getTypeName'],
+    [M.inspiration, 'getInspirationDetail'],
+    [M.inspirationBridge, 'markAgentInspirationUsed'],
+  ],
+  music: [
+    [M.musicCategory, 'MusicCategoryModel.prototype.updateCategoryList'],
+    [M.musicCategory, 'MusicCategoryModel.prototype.setSelectedCategory'],
+    [M.musicList, 'MusicListModel.prototype.getNextMusicListForDouyin'],
+    [M.musicList, 'MusicListModel.prototype.getNextSearchMusicListForDouyin'],
+    [M.musicSquare, 'MusicSquareManager.instance.setDouyinMusicInfo'],
+  ],
 };
 
 // Only plain asset lists can be applied; AI generation panels (妆容/图片/视频/实时变脸 UGC) cost quota

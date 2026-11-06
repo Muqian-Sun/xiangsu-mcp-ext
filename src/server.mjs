@@ -7,11 +7,13 @@ import { fileURLToPath } from 'node:url';
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { CallToolRequestSchema, ListToolsRequestSchema, McpError } from '@modelcontextprotocol/sdk/types.js';
+import QRCode from 'qrcode';
 import { z } from 'zod';
 import { callPlugin, listInstances } from './bridge.mjs';
 import { OfficialMcp } from './official.mjs';
 import { fetchImage, readImageFile } from './images.mjs';
 import { Projects, openWithApp } from './projects.mjs';
+import { prepareIcon } from './icons.mjs';
 import { DOWNLOAD_TTL_MS, Downloads, checkTarget, copyProject, editorRoot, outlineProject } from './works.mjs';
 
 const VERSION = '0.3.0';
@@ -22,14 +24,15 @@ const target = {
 };
 
 class Seen {
-  constructor(code, source) {
+  constructor(code, source, key = 'template_id') {
     this.code = code;
     this.source = source;
+    this.key = key;
     this.map = new Map();
   }
 
-  keep({ raw, ...page }) {
-    page.items.forEach((slim, i) => this.map.set(slim.template_id, { slim, raw: raw[i] }));
+  keep({ raw, ...page }, extra = {}) {
+    page.items.forEach((slim, i) => this.map.set(String(slim[this.key]), { slim, raw: raw[i], ...extra }));
     return page;
   }
 
@@ -58,6 +61,8 @@ export function createServer(deps = {}) {
     fetchImage,
     readImageFile,
     openWithApp,
+    prepareIcon,
+    qrPng: (url) => QRCode.toBuffer(url, { width: 360, margin: 2 }),
     sleep,
     openTimeoutMs: 90000,
     closeTimeoutMs: 30000,
@@ -75,6 +80,8 @@ export function createServer(deps = {}) {
   // different one. The plugin returns raw records next to the slim items; clients only see the slim ones.
   const seenLib = new Seen('UNKNOWN_TEMPLATE', 'library_list or library_search');
   const seenWorks = new Seen('UNKNOWN_WORK', 'works_list or works_search');
+  const seenTasks = new Seen('UNKNOWN_TASK', 'tasks_list', 'task_id');
+  const seenMusic = new Seen('UNKNOWN_MUSIC', 'music_list', 'music_id');
 
   // Forwards to the plugin window showing the target project.
   const plugin = (method, timeoutMs) => async (args) => {
@@ -297,6 +304,160 @@ export function createServer(deps = {}) {
       run: async ({ paths }) => {
         const out = d.downloads.cleanup({ paths, openPaths: await openPaths() });
         return text({ ...out, remaining: d.downloads.list().map((e) => e.path) });
+      },
+    },
+    {
+      name: 'icon_set',
+      description:
+        '设置特效图标（提交特效必需）：把一张图片居中裁成正方形、缩放到 360×360 PNG，写进工程的 Icon/ 目录（与「图标制作」窗口保存的同一文件），并让编辑器重新读取。图片可以来自 generate_image 生成的资源，或 capture_preview 截图另存的文件。type：common 通用（默认），female / male 为男女分版。之后 save_project 落盘。',
+      shape: {
+        ...target,
+        image_path: z.string().min(1).describe('图片的绝对路径（png / jpg / webp 等 sips 能读的格式）。'),
+        type: z.enum(['common', 'female', 'male']).optional().describe('图标类型，默认 common。'),
+      },
+      run: async (a) => {
+        const { project_path, instance_id, image_path, type } = a;
+        const projectPath = await projects.resolveProjectPath({ project_path, instance_id });
+        const { png, dir } = await d.prepareIcon(image_path);
+        try {
+          return text(await d.callPlugin('icon_set', { png_path: png, ...(type ? { type } : {}) }, { projectPath }));
+        } finally {
+          fs.rmSync(dir, { recursive: true, force: true });
+        }
+      },
+    },
+    {
+      name: 'icon_open',
+      description: '打开编辑器的「图标制作」窗口（官方图标模板、文字模板、AI 图标），让用户在里面挑选或调整。',
+      shape: { ...target },
+      run: plugin('icon_open'),
+    },
+    {
+      name: 'effect_check',
+      description:
+        '提交前的特效检测。默认只做本地检查、不上传：按提交流程打包并比对包体上限，检查是否原样套用模板（编辑器会拒收与模板资源相同的工程）、登录状态、最低 SDK 版本、是否已有图标，返回 ok 和 issues。cloud=true 时再打开编辑器的「特效检测」窗口做云端性能检测（会把特效包上传到抖音做测试，不是发布），等待结果 passed / not_passed / needs_optimization / failed，详情留在该窗口里。',
+      shape: {
+        ...target,
+        cloud: z.boolean().optional().describe('同时做云端检测，默认 false。'),
+        timeout_ms: z.number().int().min(10000).max(1800000).optional().describe('云端检测最长等待时间，默认 300000（5 分钟）。'),
+      },
+      run: async (a) => {
+        const { project_path, instance_id, cloud = false, timeout_ms = 300000 } = a;
+        const projectPath = await projects.resolveProjectPath({ project_path, instance_id });
+        const local = await d.callPlugin('effect_check', {}, { projectPath, timeoutMs: 300000 });
+        if (!cloud) return text(local);
+        const cloudResult = await d.callPlugin('effect_check_cloud', { timeout_ms }, { projectPath, timeoutMs: timeout_ms + 30000 });
+        return text({ ...local, cloud: cloudResult });
+      },
+    },
+    {
+      name: 'submit_prepare',
+      description:
+        '准备提交特效：先跑 effect_check 的本地检查，全部通过后走和工具栏「提交特效」按钮相同的入口，由编辑器做自己的前置检查并打开提交窗口。只做到提交窗口打开为止：名称、提示语在窗口里填，真正的上传发布只有用户在窗口里确认才会发生，本工具不会发布。检查未通过时不打开窗口，返回 issues。',
+      shape: { ...target },
+      run: async (a) => {
+        const projectPath = await projects.resolveProjectPath(a);
+        return text(await d.callPlugin('submit_prepare', {}, { projectPath, timeoutMs: 360000 }));
+      },
+    },
+    {
+      name: 'mobile_preview',
+      description:
+        '手机预览：按手机预览的方式打包当前工程，上传到抖音的预览服务（与工具栏「手机预览」相同），返回预览链接和二维码图片，用抖音 App 扫码即可在真机上看效果。会把特效包上传到抖音服务器。',
+      shape: { ...target },
+      run: async (a) => {
+        const projectPath = await projects.resolveProjectPath(a);
+        const res = await d.callPlugin('mobile_preview', {}, { projectPath, timeoutMs: 300000 });
+        const png = await d.qrPng(res.preview_url);
+        return {
+          content: [
+            { type: 'text', text: JSON.stringify({ preview_url: res.preview_url, package_bytes: res.package_bytes, response: res.response }, null, 2) },
+            { type: 'image', data: png.toString('base64'), mimeType: 'image/png' },
+          ],
+        };
+      },
+    },
+    {
+      name: 'tasks_list',
+      description:
+        '列出创作者中心的活动和特效任务（与首页任务广场同源）：标题、状态（如「领取」）、是否已领取、剩余天数、收益、标签。bindable=true 的（已领取的任务）可以用 task_bind 绑定到工程；领取要用户在像塑首页或抖音 App 里操作，工具不提供领取。',
+      shape: { ...target },
+      run: async (a) => {
+        const { project_path, instance_id } = a;
+        return text(seenTasks.keep(await d.callPlugin('tasks_list', {}, await homeWindow({ project_path, instance_id }))));
+      },
+    },
+    {
+      name: 'task_bind',
+      description:
+        '把工程绑定到一个已领取的任务，和从任务详情页点「去创作」打开的工程一样，提交时会带上该任务。编辑器只在打开工程时写入任务信息，所以本工具会先关闭该工程的窗口（有未保存改动时拒绝，先 save_project），再带着任务信息重新打开，返回新的 pid 和 instance_id。task_id 须来自本会话的 tasks_list。',
+      shape: {
+        path: z.string().min(1).describe('工程文件夹的绝对路径。'),
+        task_id: z.string().min(1).describe('tasks_list 返回的 task_id（须 bindable=true）。'),
+      },
+      run: async ({ path: projectDir, task_id }) => {
+        const t = seenTasks.get(task_id);
+        if (!t.raw.extra) throw Error(`TASK_NOT_RECEIVED: ${task_id}; receive it in 像塑's homepage or the Douyin app first`);
+        const open = (await projects.windows()).some((w) => w.project_path && fs.existsSync(w.project_path) && fs.realpathSync(w.project_path) === fs.realpathSync(projectDir));
+        if (open) await projects.close({ project_path: projectDir });
+        return text({ task: t.slim, ...(await projects.open({ path: projectDir, activity: t.raw.extra })) });
+      },
+    },
+    {
+      name: 'inspiration_detail',
+      description: '按 ID 查看一条创作灵感的详情（描述、图片、奖励、关联特效、音乐）。灵感 ID 来自像塑或抖音 App 里的灵感页；编辑器没有灵感列表接口。',
+      shape: { ...target, id: z.string().min(1).describe('灵感 ID。') },
+      run: async (a) => {
+        const { project_path, instance_id, id } = a;
+        return text(await d.callPlugin('inspiration_detail', { id }, await homeWindow({ project_path, instance_id })));
+      },
+    },
+    {
+      name: 'inspiration_bind',
+      description: '把一条创作灵感绑定到当前工程（编辑器给 agent 的同一接口），提交时会带上它。之后 save_project 落盘。',
+      shape: { ...target, id: z.string().min(1).describe('灵感 ID。') },
+      run: plugin('inspiration_bind'),
+    },
+    {
+      name: 'music_categories',
+      description: '列出抖音音乐库的分类（像塑原创、推荐、抖音收藏、潮流心选等），返回 code 和名称。',
+      shape: { ...target },
+      run: async (a) => {
+        const { project_path, instance_id } = a;
+        return text(await d.callPlugin('music_categories', {}, await homeWindow({ project_path, instance_id })));
+      },
+    },
+    {
+      name: 'music_list',
+      description: '列出抖音音乐：传 query 按关键词搜索，或传 category_code（music_categories 返回）看某个分类的第一页（35 首）。返回 music_id、标题、作者、时长（秒）、封面和试听链接。',
+      shape: {
+        ...target,
+        query: z.string().min(1).optional().describe('搜索关键词。'),
+        category_code: z.string().min(1).optional().describe('分类 code；与 query 二选一。'),
+      },
+      run: async (a) => {
+        const { project_path, instance_id, query, category_code } = a;
+        if ((query === undefined) === (category_code === undefined)) throw Error('INVALID_ARGUMENTS(music_list): pass exactly one of query or category_code');
+        const res = await d.callPlugin('music_list', query !== undefined ? { query } : { category_code }, await homeWindow({ project_path, instance_id }));
+        return text(seenMusic.keep(res, { category_code: category_code ?? null }));
+      },
+    },
+    {
+      name: 'music_apply',
+      description:
+        '把一首抖音音乐设为特效的音乐，和音乐库里点「使用」相同：下载音频进工程、写入音乐信息，并在场景里加入抖音音乐对象（再次使用会替换上一首）。start_sec / end_sec 截取片段，默认整首。music_id 须来自本会话的 music_list。之后 capture_preview 验收、save_project 落盘。',
+      shape: {
+        ...target,
+        music_id: z.string().min(1).describe('music_list 返回的 music_id。'),
+        start_sec: z.number().min(0).optional().describe('片段开始（秒），默认 0。'),
+        end_sec: z.number().positive().optional().describe('片段结束（秒），默认整首时长。'),
+      },
+      run: async (a) => {
+        const { project_path, instance_id, music_id, start_sec, end_sec } = a;
+        const projectPath = await projects.resolveProjectPath({ project_path, instance_id });
+        const m = seenMusic.get(music_id);
+        const params = { item: m.raw, ...(m.category_code ? { category_code: m.category_code } : {}), ...(start_sec === undefined ? {} : { start_sec }), ...(end_sec === undefined ? {} : { end_sec }) };
+        return text(await d.callPlugin('music_apply', params, { projectPath, timeoutMs: 180000 }));
       },
     },
     {
