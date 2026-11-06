@@ -36,6 +36,9 @@ const REQUIRED = {
     [M.toolbar, 'closeProjectAndBackToHome'],
     [M.ipc, 'OpenProjectFromHomeCommand'],
     [M.sender, 'EditSender.getInstance'],
+    [M.ipc, 'GetProjectProcessStatusCommand'],
+    [M.multiProcess, 'CHILD_PROCESS_LIMIT'],
+    [M.multiProcess, 'ChildProcessStatus.Used'],
   ],
   works: [
     [M.worksPanel, 'apiTemplatesPanel'],

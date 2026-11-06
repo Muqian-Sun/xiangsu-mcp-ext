@@ -142,6 +142,9 @@ function setup({ active = true, packageAdds = 1, changed = false } = {}) {
       Object.assign(this, { op, p, extra });
     }
   }
+  class GetProjectProcessStatusCommand {}
+  // Editor process pid -> status, as the home process reports it (2 = Used, 1 = Ready).
+  const processes = new Map([[100, { process: 2 }]]);
   const modules = {
     [M.ef]: {
       Extension: { MenuConfig: { MenuConfigAPIKey: 'menuKey' } },
@@ -164,14 +167,21 @@ function setup({ active = true, packageAdds = 1, changed = false } = {}) {
     },
     [M.hover]: { HoverTipsMap: { _basePath: hoverDir, getObjectTipsBy: (id) => tips[id] || { Enable: false, Images: [''] } } },
     [M.toolbar]: { closeProjectAndBackToHome: async (...a) => calls.closed.push(a) },
-    [M.ipc]: { OpenProjectFromHomeCommand },
-    [M.sender]: { EditSender: { getInstance: () => ({ sendCmdWithResponse: async (cmd) => (calls.launched.push(cmd), 'ok') }) } },
+    [M.ipc]: { OpenProjectFromHomeCommand, GetProjectProcessStatusCommand },
+    [M.multiProcess]: { CHILD_PROCESS_LIMIT: 2, ChildProcessStatus: { UnReady: 0, Ready: 1, Used: 2 } },
+    [M.sender]: {
+      EditSender: {
+        getInstance: () => ({
+          sendCmdWithResponse: async (cmd) => (cmd instanceof GetProjectProcessStatusCommand ? [...processes] : (calls.launched.push(cmd), 'ok')),
+        }),
+      },
+    },
   };
   const mod = (name) => {
     if (!(name in modules)) throw Error(`MODULE_NOT_FOUND: ${name}`);
     return modules[name];
   };
-  return { lib: new Library(mod), calls, warps, dyn, modules, projectDir, hoverDir, resources, sceneObjects };
+  return { lib: new Library(mod), calls, warps, dyn, modules, projectDir, hoverDir, resources, sceneObjects, processes };
 }
 
 test('menu_list flattens the editor menu with translated names and hides cloud AI entries', () => {
@@ -287,6 +297,18 @@ test('project_launch asks the home process to open or create, validating the tar
   await assert.rejects(lib.projectLaunch({ operation: 'openTemplate', path: 'relative' }), /INVALID_PATH/);
   await lib.projectLaunch({ operation: 'openTemplate', path: projectDir, template_id: 77 });
   assert.deepEqual({ ...calls.launched.at(-1) }, { op: 'openTemplate', p: projectDir, extra: { enter_method: 'xiangsu_mcp_ext', template_id: '77' } });
+});
+
+test('project_launch refuses when every project window allowed is in use', async () => {
+  const { lib, calls, projectDir, processes } = setup();
+  fs.writeFileSync(path.join(projectDir, 'effect.dyehpj'), '{}');
+  processes.set(101, { process: 1 });
+  await lib.projectLaunch({ operation: 'openTemplate', path: projectDir });
+  assert.equal(calls.launched.length, 1);
+  processes.set(101, { process: 2 });
+  await assert.rejects(lib.projectLaunch({ operation: 'openTemplate', path: projectDir }), /WINDOW_LIMIT: 像塑 allows 2 project windows/);
+  await assert.rejects(lib.projectLaunch({ operation: 'createNew' }), /WINDOW_LIMIT/);
+  assert.equal(calls.launched.length, 1);
 });
 
 test('project_close refuses unsaved changes unless discarding, then closes asynchronously', async () => {

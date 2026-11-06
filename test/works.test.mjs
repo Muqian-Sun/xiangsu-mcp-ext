@@ -338,6 +338,39 @@ test('works_download with dest moves the work there and deletes the editor copy 
   assert.equal(seen.filter((s) => s.method === 'works_download').length, 1);
 });
 
+test('a dest taken by someone else during the download is left alone and never registered', async () => {
+  const { dl, deps } = worksWorld();
+  const dest = path.join(tmpdir('xs-dest-'), 'ref');
+  const call = deps.callPlugin;
+  deps.callPlugin = async (method, params, opts) => {
+    if (method === 'works_download') {
+      fs.mkdirSync(dest);
+      fs.writeFileSync(path.join(dest, 'theirs.txt'), 'not ours');
+    }
+    return call(method, params, opts);
+  };
+  const client = await connect(deps);
+  const res = await client.callTool({ name: 'works_download', arguments: { template_id: '1', dest } });
+  assert.match(res.content[0].text, /TARGET_NOT_EMPTY/);
+  assert.deepEqual(fs.readdirSync(dest), ['theirs.txt']);
+  assert.deepEqual(deps.downloads.list(), []);
+  assert.equal(fs.existsSync(dl.guid), false);
+});
+
+test('copyProject removes a half-written copy it created', () => {
+  const root = fakeProject();
+  const locked = path.join(root, 'Assets', 'locked.bin');
+  fs.writeFileSync(locked, 'x');
+  fs.chmodSync(locked, 0o000);
+  const dest = path.join(tmpdir('xs-dest-'), 'ref');
+  try {
+    assert.throws(() => copyProject(root, dest), /EACCES/);
+  } finally {
+    fs.chmodSync(locked, 0o600);
+  }
+  assert.equal(fs.existsSync(dest), false);
+});
+
 test('works_download without dest records the editor guid folder and works_cleanup removes it', async () => {
   const { dl, deps } = worksWorld();
   const client = await connect(deps);

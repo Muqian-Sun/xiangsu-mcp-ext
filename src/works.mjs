@@ -94,9 +94,16 @@ export function checkTarget(dest) {
   return path.resolve(dest);
 }
 
+// A copy that fails midway is removed only when this call created the folder.
 export function copyProject(src, dest) {
   const abs = checkTarget(dest);
-  fs.cpSync(src, abs, { recursive: true, filter: (from) => !SKIP_DIRS.has(path.relative(src, from).split(path.sep)[0]) });
+  const existed = fs.existsSync(abs);
+  try {
+    fs.cpSync(src, abs, { recursive: true, filter: (from) => !SKIP_DIRS.has(path.relative(src, from).split(path.sep)[0]) });
+  } catch (e) {
+    if (!existed) fs.rmSync(abs, { recursive: true, force: true });
+    throw e;
+  }
   return abs;
 }
 

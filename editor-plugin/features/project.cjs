@@ -32,8 +32,17 @@ const methods = {
     }
     const extra = { enter_method: 'xiangsu_mcp_ext' };
     if (operation === 'openTemplate' && template_id !== undefined) extra.template_id = String(template_id);
-    const { OpenProjectFromHomeCommand } = this.mod(M.ipc);
-    const res = await this.mod(M.sender).EditSender.getInstance().sendCmdWithResponse(
+    const { OpenProjectFromHomeCommand, GetProjectProcessStatusCommand } = this.mod(M.ipc);
+    const sender = this.mod(M.sender).EditSender.getInstance();
+    // The home process caps project windows; at the cap it only shows a warning dialog and never opens,
+    // so refuse up front instead of letting the caller wait for a window that will not come.
+    const { CHILD_PROCESS_LIMIT, ChildProcessStatus } = this.mod(M.multiProcess);
+    const processes = new Map(await sender.sendCmdWithResponse(new GetProjectProcessStatusCommand()));
+    const used = [...processes.values()].filter((p) => p.process === ChildProcessStatus.Used).length;
+    if (used >= CHILD_PROCESS_LIMIT) {
+      throw Error(`WINDOW_LIMIT: 像塑 allows ${CHILD_PROCESS_LIMIT} project windows and all are in use; close one with project_close first`);
+    }
+    const res = await sender.sendCmdWithResponse(
       new OpenProjectFromHomeCommand(operation, withPath ? projectPath : undefined, extra),
     );
     return { requested: operation, path: withPath ? projectPath : null, response: res === undefined ? null : res };
