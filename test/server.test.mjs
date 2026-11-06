@@ -1,7 +1,7 @@
 import test from 'node:test';
+import { tmpdir } from './tmp.mjs';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 import http from 'node:http';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
@@ -27,9 +27,11 @@ const OWN = [
   'project_new',
   'project_open',
   'resource_delete_unused',
+  'works_cleanup',
   'works_download',
   'works_list',
   'works_nav',
+  'works_open',
   'works_preview',
   'works_search',
 ];
@@ -200,7 +202,7 @@ test('image helpers sniff real bytes from URLs and files and reject non-images',
   assert.equal((await fetchImage(`${base}/webp`)).mimeType, 'image/webp');
   await assert.rejects(fetchImage(`${base}/html`), /not a png\/jpeg\/gif\/webp image/);
   await assert.rejects(fetchImage(`${base}/missing`), /HTTP 404/);
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'xs-img-'));
+  const dir = tmpdir('xs-img-');
   fs.writeFileSync(path.join(dir, 'a.gif'), 'GIF89a....');
   fs.writeFileSync(path.join(dir, 'b.txt'), 'hello');
   assert.equal((await readImageFile(path.join(dir, 'a.gif'))).mimeType, 'image/gif');

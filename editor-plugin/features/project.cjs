@@ -4,7 +4,9 @@ const fs = require('fs');
 const path = require('path');
 const { M } = require('./common.cjs');
 
-const OPERATIONS = new Set(['createNew', 'openLocal']);
+// openTemplate is how the homepage opens a work: no version-upgrade or save-copy prompts, and the
+// project opens as unsaved-new.
+const OPERATIONS = new Set(['createNew', 'openLocal', 'openTemplate']);
 const CLOSE_DELAY_MS = 300;
 
 const methods = {
@@ -20,18 +22,21 @@ const methods = {
 
   // The home process decides which window hosts the project (a new one, or an idle editor process);
   // the project in this window is never replaced.
-  async projectLaunch({ operation, path: projectPath }) {
+  async projectLaunch({ operation, path: projectPath, template_id }) {
     this.ensureCompatible('project');
-    if (!OPERATIONS.has(operation)) throw Error(`INVALID_OPERATION: ${operation}; expected createNew or openLocal`);
-    if (operation === 'openLocal') {
-      if (typeof projectPath !== 'string' || !path.isAbsolute(projectPath)) throw Error('INVALID_PATH: openLocal needs an absolute project folder');
+    if (!OPERATIONS.has(operation)) throw Error(`INVALID_OPERATION: ${operation}; expected ${[...OPERATIONS].join(', ')}`);
+    const withPath = operation !== 'createNew';
+    if (withPath) {
+      if (typeof projectPath !== 'string' || !path.isAbsolute(projectPath)) throw Error(`INVALID_PATH: ${operation} needs an absolute project folder`);
       if (!fs.existsSync(path.join(projectPath, 'effect.dyehpj'))) throw Error(`NOT_A_PROJECT: ${projectPath} has no effect.dyehpj`);
     }
+    const extra = { enter_method: 'xiangsu_mcp_ext' };
+    if (operation === 'openTemplate' && template_id !== undefined) extra.template_id = String(template_id);
     const { OpenProjectFromHomeCommand } = this.mod(M.ipc);
     const res = await this.mod(M.sender).EditSender.getInstance().sendCmdWithResponse(
-      new OpenProjectFromHomeCommand(operation, operation === 'openLocal' ? projectPath : undefined, { enter_method: 'xiangsu_mcp_ext' }),
+      new OpenProjectFromHomeCommand(operation, withPath ? projectPath : undefined, extra),
     );
-    return { requested: operation, path: operation === 'openLocal' ? projectPath : null, response: res === undefined ? null : res };
+    return { requested: operation, path: withPath ? projectPath : null, response: res === undefined ? null : res };
   },
 
   // Same path as the toolbar's "back to home": unloads the project and exits this window's process,

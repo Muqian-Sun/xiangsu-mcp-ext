@@ -1,16 +1,19 @@
 import test from 'node:test';
+import { tmpdir } from './tmp.mjs';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
+import http from 'node:http';
+import { spawn } from 'node:child_process';
 import { createRequire } from 'node:module';
+import { fileURLToPath } from 'node:url';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { createServer } from '../src/server.mjs';
-import { checkTarget, copyProject, outlineProject } from '../src/works.mjs';
+import { DOWNLOAD_TTL_MS, Downloads, checkTarget, copyProject, editorRoot, outlineProject } from '../src/works.mjs';
 
 const require = createRequire(import.meta.url);
-process.env.XIANGSU_MCP_EXT_STATE = fs.mkdtempSync(path.join(os.tmpdir(), 'xs-state-'));
+process.env.XIANGSU_MCP_EXT_STATE = tmpdir('xs-state-');
 const { Library, M, WORK_SORTS } = require('../editor-plugin/library.cjs');
 
 function work(id, title, { effectId = 90686370, file = true } = {}) {
@@ -23,9 +26,13 @@ function work(id, title, { effectId = 90686370, file = true } = {}) {
   };
 }
 
-// A fake editor with the homepage template modules; transformTemplate mimics the editor's field names.
-function setup({ download = { status: 'success', localPath: '/cache/1.zip', unzipPath: '/tmp/CreatedFromTemplate/g/未命名' } } = {}) {
+// A fake editor with the homepage template modules; transformTemplate mimics the editor's field names,
+// and the download model writes its zip (and partial .tmp) into a cache folder like the real one.
+function setup({ download = { status: 'success', unzipPath: '/tmp/CreatedFromTemplate/g/未命名' }, cached = false } = {}) {
   const calls = { list: [], search: [], download: [], destroyed: 0 };
+  const cache = tmpdir('xs-cache-');
+  const zipOf = (id) => path.join(cache, `${id}.zip`);
+  if (cached) fs.writeFileSync(zipOf('1'), 'users own cached zip');
   const modules = {
     [M.worksPanel]: {
       apiTemplatesPanel: async () => ({ body: { statusCode: 0, data: { categories: [{ id: 44668, name: '推荐' }, { id: 40669, name: '官方工程' }] } } }),
@@ -56,9 +63,14 @@ function setup({ download = { status: 'success', localPath: '/cache/1.zip', unzi
     },
     [M.worksDownload]: {
       DownloadTemplateModel: class {
+        getTemplateProjectPath(id) {
+          return zipOf(id);
+        }
         async startDownload(item) {
           calls.download.push(item);
-          return download;
+          fs.writeFileSync(zipOf(item.templateId), 'zip');
+          fs.writeFileSync(path.join(cache, `${item.templateId}.tmp`), 'partial');
+          return { ...download, localPath: zipOf(item.templateId) };
         }
         destroy() {
           calls.destroyed += 1;
@@ -70,7 +82,7 @@ function setup({ download = { status: 'success', localPath: '/cache/1.zip', unzi
     if (!(name in modules)) throw Error(`MODULE_NOT_FOUND: ${name}`);
     return modules[name];
   };
-  return { lib: new Library(mod), calls, modules };
+  return { lib: new Library(mod), calls, modules, cache };
 }
 
 test('works_nav lists homepage categories and sorts', async () => {
@@ -128,11 +140,12 @@ test('works_search sends the homepage search word within a category', async () =
 });
 
 test('works_download needs a listed work and passes the editor the fields its unzip step writes', async () => {
-  const { lib, calls } = setup();
+  const { lib, calls, cache } = setup();
   await assert.rejects(lib.worksDownload({ template_id: '1' }), /UNKNOWN_WORK: 1/);
   await lib.worksList({});
   const out = await lib.worksDownload({ template_id: '1' });
-  assert.deepEqual(out, { template_id: '1', title: 'AI 修仙合掌转场', project_path: '/tmp/CreatedFromTemplate/g/未命名', package_path: '/cache/1.zip' });
+  assert.deepEqual(out, { template_id: '1', title: 'AI 修仙合掌转场', project_path: '/tmp/CreatedFromTemplate/g/未命名', package_cached: false });
+  assert.deepEqual(fs.readdirSync(cache), []);
   const sent = calls.download[0];
   assert.equal(sent.templateId, '1');
   assert.equal(sent.templateID, '1');
@@ -144,11 +157,19 @@ test('works_download needs a listed work and passes the editor the fields its un
   assert.equal(calls.download.length, 1);
 });
 
-test('works_download surfaces the editor download failure stage', async () => {
-  const { lib, calls } = setup({ download: { status: 'fail', localPath: '', unzipPath: '', errorInfo: 'unzip' } });
+test('works_download surfaces the editor download failure stage and leaves no zip behind', async () => {
+  const { lib, calls, cache } = setup({ download: { status: 'fail', unzipPath: '', errorInfo: 'unzip' } });
   await lib.worksList({});
   await assert.rejects(lib.worksDownload({ template_id: '1' }), /WORK_DOWNLOAD_FAILED: work 1 status=fail stage=unzip/);
   assert.equal(calls.destroyed, 1);
+  assert.deepEqual(fs.readdirSync(cache), []);
+});
+
+test('works_download keeps a zip the user already had cached', async () => {
+  const { lib, cache } = setup({ cached: true });
+  await lib.worksList({});
+  assert.equal((await lib.worksDownload({ template_id: '1' })).package_cached, true);
+  assert.ok(fs.existsSync(path.join(cache, '1.zip')));
 });
 
 test('works calls refuse when the homepage modules are missing', async () => {
@@ -169,7 +190,7 @@ test('works_covers returns cover and gif urls for listed works', async () => {
 });
 
 function fakeProject() {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'xs-work-'));
+  const root = tmpdir('xs-work-');
   const put = (rel, body) => {
     fs.mkdirSync(path.dirname(path.join(root, rel)), { recursive: true });
     fs.writeFileSync(path.join(root, rel), body);
@@ -196,7 +217,7 @@ test('outline lists project files without the Library cache', () => {
 
 test('copyProject copies into an empty target only, skipping the Library cache', () => {
   const root = fakeProject();
-  const dest = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'xs-dest-')), '参考');
+  const dest = path.join(tmpdir('xs-dest-'), '参考');
   assert.equal(copyProject(root, dest), dest);
   assert.ok(fs.existsSync(path.join(dest, 'Graph/ScriptTemplate/OnStart/CGOnStart.js')));
   assert.ok(fs.existsSync(path.join(dest, 'Assets/Library/keep.txt')));
@@ -236,25 +257,156 @@ test('server sort enum matches the plugin ranker table', async () => {
   assert.deepEqual(tools.find((t) => t.name === 'works_list').inputSchema.properties.sort.enum, Object.keys(WORK_SORTS));
 });
 
-test('works_download copies to dest and returns an outline of the copy', async () => {
-  const root = fakeProject();
-  const dest = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'xs-dest-')), 'ref');
+// An editor unzip in the real layout: <tmp>/CreatedFromTemplate/<guid>/<name>.
+function editorDownload() {
+  const guid = path.join(tmpdir('xs-inst-'), 'CreatedFromTemplate', 'g1');
+  fs.mkdirSync(guid, { recursive: true });
+  const project = path.join(guid, '未命名');
+  fs.cpSync(fakeProject(), project, { recursive: true });
+  return { guid, project };
+}
+
+// A plugin window (pid 7) that serves works_download and can be told which project it shows.
+function worksWorld({ open = null } = {}) {
+  const dl = editorDownload();
   const seen = [];
-  const client = await connect({
-    listInstances: () => [{ pid: 7 }],
+  const state = { open };
+  const deps = {
+    downloads: new Downloads({ stateDir: tmpdir('xs-reg-') }),
+    sleep: async () => {},
+    openTimeoutMs: 50,
+    instanceTimeoutMs: 0,
+    listInstances: () => [{ pid: 7 }, ...(state.open ? [{ pid: 8 }] : [])],
     callPlugin: async (method, params, opts) => {
       seen.push({ method, params, opts });
-      return { template_id: '1', title: 'AI 修仙合掌转场', project_path: root, package_path: '/cache/1.zip' };
+      if (method === 'status') return { projectPath: opts.pid === 8 ? state.open : null };
+      if (method === 'project_state') return { scene_ready: true };
+      if (method === 'project_launch') {
+        if (state.launch) state.open = state.launch(params);
+        return {};
+      }
+      if (method === 'works_download') return { template_id: '1', title: 'AI 修仙合掌转场', project_path: dl.project, package_cached: false };
+      throw Error(`unexpected ${method}`);
     },
-  });
+  };
+  return { dl, seen, state, deps };
+}
+
+test('editorRoot claims the guid folder only in the editor layout', () => {
+  assert.equal(editorRoot('/x/CreatedFromTemplate/g1/未命名'), '/x/CreatedFromTemplate/g1');
+  assert.equal(editorRoot('/x/elsewhere/g1/未命名'), '/x/elsewhere/g1/未命名');
+});
+
+test('the download registry deletes recorded downloads only, keeping open ones and honouring age', () => {
+  let now = 1000;
+  const reg = new Downloads({ stateDir: tmpdir('xs-reg-'), now: () => now });
+  const a = tmpdir('xs-a-');
+  const b = tmpdir('xs-b-');
+  const c = tmpdir('xs-c-');
+  reg.record({ path: a, template_id: '1' });
+  now = 5000;
+  reg.record({ path: b, template_id: '2' });
+  reg.record({ path: c, template_id: '3' });
+  assert.throws(() => reg.cleanup({ paths: [tmpdir('xs-other-')] }), /NOT_A_DOWNLOAD/);
+  assert.deepEqual(reg.cleanup({ olderThanMs: 3000 }), { deleted: [a], kept_open: [], already_gone: [] });
+  assert.equal(fs.existsSync(a), false);
+  assert.equal(fs.existsSync(b), true);
+  fs.mkdirSync(path.join(b, 'proj'));
+  assert.deepEqual(reg.cleanup({ paths: [path.join(b, 'proj')] }), { deleted: [b], kept_open: [], already_gone: [] });
+  fs.rmSync(c, { recursive: true });
+  const d = tmpdir('xs-d-');
+  reg.record({ path: d, template_id: '4' });
+  assert.deepEqual(reg.cleanup({ openPaths: [path.join(d, 'x')] }), { deleted: [], kept_open: [d], already_gone: [c] });
+  assert.deepEqual(reg.list().map((e) => e.path), [d]);
+  assert.deepEqual(reg.cleanup({}), { deleted: [d], kept_open: [], already_gone: [] });
+  assert.deepEqual(reg.list(), []);
+});
+
+test('works_download with dest moves the work there and deletes the editor copy at once', async () => {
+  const { dl, seen, deps } = worksWorld();
+  const dest = path.join(tmpdir('xs-dest-'), 'ref');
+  const client = await connect(deps);
   const res = JSON.parse((await client.callTool({ name: 'works_download', arguments: { template_id: '1', dest } })).content[0].text);
-  assert.deepEqual(seen[0], { method: 'works_download', params: { template_id: '1' }, opts: { pid: 7, timeoutMs: 600000 } });
+  assert.deepEqual(seen.find((s) => s.method === 'works_download'), { method: 'works_download', params: { template_id: '1' }, opts: { pid: 7, timeoutMs: 600000 } });
   assert.equal(res.project_path, dest);
-  assert.equal(res.editor_copy, root);
   assert.equal(res.outline.file_count, 4);
+  assert.ok(res.expires_at);
+  assert.equal(fs.existsSync(dl.guid), false);
+  assert.deepEqual(deps.downloads.list().map((e) => e.path), [dest]);
   const again = await client.callTool({ name: 'works_download', arguments: { template_id: '1', dest } });
   assert.match(again.content[0].text, /TARGET_NOT_EMPTY/);
-  assert.equal(seen.length, 1);
+  assert.equal(seen.filter((s) => s.method === 'works_download').length, 1);
+});
+
+test('works_download without dest records the editor guid folder and works_cleanup removes it', async () => {
+  const { dl, deps } = worksWorld();
+  const client = await connect(deps);
+  const res = JSON.parse((await client.callTool({ name: 'works_download', arguments: { template_id: '1' } })).content[0].text);
+  assert.equal(res.project_path, dl.project);
+  assert.deepEqual(deps.downloads.list().map((e) => e.path), [dl.guid]);
+  const bad = await client.callTool({ name: 'works_cleanup', arguments: { paths: [tmpdir('xs-other-')] } });
+  assert.match(bad.content[0].text, /NOT_A_DOWNLOAD/);
+  const out = JSON.parse((await client.callTool({ name: 'works_cleanup', arguments: { paths: [res.project_path] } })).content[0].text);
+  assert.deepEqual(out, { deleted: [dl.guid], kept_open: [], already_gone: [], remaining: [] });
+  assert.equal(fs.existsSync(dl.guid), false);
+});
+
+test('works downloads past their lifetime are swept by the next download', async () => {
+  const { deps } = worksWorld();
+  const old = tmpdir('xs-old-');
+  const reg = new Downloads({ stateDir: path.dirname(deps.downloads.file), now: () => Date.now() - DOWNLOAD_TTL_MS - 1 });
+  reg.record({ path: old, template_id: '0' });
+  const client = await connect(deps);
+  await client.callTool({ name: 'works_download', arguments: { template_id: '1' } });
+  assert.equal(fs.existsSync(old), false);
+  assert.equal(deps.downloads.list().length, 1);
+});
+
+test('works_open opens the download as a template and keeps it while the window is open', async () => {
+  const { dl, seen, state, deps } = worksWorld();
+  state.launch = (p) => p.path;
+  const client = await connect(deps);
+  const res = JSON.parse((await client.callTool({ name: 'works_open', arguments: { template_id: '1' } })).content[0].text);
+  assert.deepEqual(seen.find((s) => s.method === 'project_launch').params, { operation: 'openTemplate', path: dl.project, template_id: '1' });
+  assert.equal(res.pid, 8);
+  assert.equal(res.project_path, dl.project);
+  const kept = JSON.parse((await client.callTool({ name: 'works_cleanup', arguments: {} })).content[0].text);
+  assert.deepEqual(kept.kept_open, [dl.guid]);
+  assert.ok(fs.existsSync(dl.project));
+  state.open = null;
+  const gone = JSON.parse((await client.callTool({ name: 'works_cleanup', arguments: {} })).content[0].text);
+  assert.deepEqual(gone.deleted, [dl.guid]);
+});
+
+test('works_open deletes the download when the window never opens', async () => {
+  const { dl, deps } = worksWorld();
+  const client = await connect(deps);
+  const res = await client.callTool({ name: 'works_open', arguments: { template_id: '1' } });
+  assert.match(res.content[0].text, /OPEN_TIMEOUT/);
+  assert.equal(fs.existsSync(dl.guid), false);
+  assert.deepEqual(deps.downloads.list(), []);
+});
+
+// A connected official MCP keeps an HTTP request open; this stand-in never answers, which holds the
+// server's event loop the same way.
+test('the stdio server exits when its client closes stdin, even with an official request open', async (t) => {
+  const pending = [];
+  const official = http.createServer((req, res) => pending.push(res));
+  await new Promise((r) => official.listen(0, '127.0.0.1', r));
+  t.after(() => {
+    for (const res of pending) res.destroy();
+    official.close();
+  });
+  const child = spawn(process.execPath, [fileURLToPath(new URL('../src/server.mjs', import.meta.url))], {
+    env: { ...process.env, XIANGSU_MCP_URL: `http://127.0.0.1:${official.address().port}/mcp` },
+    stdio: ['pipe', 'ignore', 'ignore'],
+  });
+  const exited = new Promise((r) => child.on('exit', (code) => r(code)));
+  while (!pending.length) await new Promise((r) => setTimeout(r, 50));
+  child.stdin.end();
+  const code = await Promise.race([exited, new Promise((r) => setTimeout(() => r('still running'), 5000))]);
+  if (code === 'still running') child.kill();
+  assert.equal(code, 0);
 });
 
 test('works_preview shows the gif only when asked', async () => {

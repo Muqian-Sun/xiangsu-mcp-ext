@@ -1,12 +1,12 @@
 import test from 'node:test';
+import { tmpdir } from './tmp.mjs';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
-const STATE = fs.mkdtempSync(path.join(os.tmpdir(), 'xs-state-'));
+const STATE = tmpdir('xs-state-');
 process.env.XIANGSU_MCP_EXT_STATE = STATE;
 const { Library, M, CONFIG_PATH } = require('../editor-plugin/library.cjs');
 
@@ -45,8 +45,8 @@ function obj(name, parent) {
 
 // A fake editor: scene objects, component editors, menu registry, project resources and serialized scene.
 function setup({ active = true, packageAdds = 1, changed = false } = {}) {
-  const projectDir = fs.mkdtempSync(path.join(os.tmpdir(), 'xs-proj-'));
-  const hoverDir = fs.mkdtempSync(path.join(os.tmpdir(), 'xs-hover-'));
+  const projectDir = tmpdir('xs-proj-');
+  const hoverDir = tmpdir('xs-hover-');
   fs.mkdirSync(path.join(hoverDir, 'object', 'FaceWarpX'), { recursive: true });
   fs.writeFileSync(path.join(hoverDir, 'object', 'FaceWarpX', 'FaceWarpX.gif'), 'GIF89a');
   const calls = { undo: [], created: [], downloaded: [], launched: [], closed: [], removed: [], deleted: [] };
@@ -284,6 +284,9 @@ test('project_launch asks the home process to open or create, validating the tar
   assert.deepEqual(out, { requested: 'openLocal', path: projectDir, response: 'ok' });
   await lib.projectLaunch({ operation: 'createNew' });
   assert.deepEqual(calls.launched.map((c) => [c.op, c.p]), [['openLocal', projectDir], ['createNew', undefined]]);
+  await assert.rejects(lib.projectLaunch({ operation: 'openTemplate', path: 'relative' }), /INVALID_PATH/);
+  await lib.projectLaunch({ operation: 'openTemplate', path: projectDir, template_id: 77 });
+  assert.deepEqual({ ...calls.launched.at(-1) }, { op: 'openTemplate', p: projectDir, extra: { enter_method: 'xiangsu_mcp_ext', template_id: '77' } });
 });
 
 test('project_close refuses unsaved changes unless discarding, then closes asynchronously', async () => {

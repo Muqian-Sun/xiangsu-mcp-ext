@@ -1,13 +1,13 @@
 import test from 'node:test';
+import { tmpdir } from './tmp.mjs';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
-process.env.XIANGSU_MCP_EXT_STATE = fs.mkdtempSync(path.join(os.tmpdir(), 'xs-state-'));
+process.env.XIANGSU_MCP_EXT_STATE = tmpdir('xs-state-');
 const { Library, M, REQUIRED } = require('../editor-plugin/library.cjs');
 
 const PKG_BYTES = Buffer.from('fake ehpackage bytes');
@@ -23,7 +23,7 @@ function item(id, title, panelKey, md5 = PKG_MD5) {
 }
 
 function setup({ listItems = [item('111', '芒果脸', undefined)], listStatus = 0, active = true, importResult, downloadBytes = PKG_BYTES } = {}) {
-  const shared = fs.mkdtempSync(path.join(os.tmpdir(), 'xs-lib-'));
+  const shared = tmpdir('xs-lib-');
   const calls = { download: 0, import: [], undo: [], lock: [], reload: 0, search: [] };
   const sceneObjects = [{ name: '面部拉伸', parent: null }];
   const sceneEditor = { id: 'scene', getAllSceneObjectEditors: () => [...sceneObjects] };
