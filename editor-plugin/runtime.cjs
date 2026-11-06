@@ -95,6 +95,7 @@ function snapshot(value, depth = 2, seen = new WeakSet()) {
 }
 
 const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
+const LIBRARY_PATH = require.resolve('./library.cjs');
 
 class Runtime {
   constructor(config) {
@@ -102,11 +103,30 @@ class Runtime {
     this.token = crypto.randomBytes(24).toString('hex');
     this.server = null;
     this.stateFile = path.join(INSTANCE_DIR, `${process.pid}.json`);
+    this.loadLibrary();
     this.methods = {
       status: () => this.status(),
-      describe: ({ module, depth = 1 }) => snapshot(requireModule(module), depth),
-      eval: ({ code, depth = 2 }) => this.evaluate(code, depth),
+      library_nav: () => this.library.nav(),
+      library_list: (p) => this.library.list(p),
+      library_search: (p) => this.library.search(p),
+      library_apply: (p) => this.library.apply(p),
     };
+    if (this.config.devEval) {
+      Object.assign(this.methods, {
+        describe: ({ module, depth = 1 }) => snapshot(requireModule(module), depth),
+        eval: ({ code, depth = 2 }) => this.evaluate(code, depth),
+        reload: () => {
+          delete require.cache[LIBRARY_PATH];
+          this.loadLibrary();
+          return { reloaded: LIBRARY_PATH };
+        },
+      });
+    }
+  }
+
+  loadLibrary() {
+    const { Library } = require(LIBRARY_PATH);
+    this.library = new Library(requireModule);
   }
 
   status() {
@@ -121,7 +141,6 @@ class Runtime {
   }
 
   async evaluate(code, depth) {
-    if (!this.config.devEval) throw Error('EVAL_DISABLED');
     if (typeof code !== 'string' || !code) throw Error('code must be a non-empty string');
     const fn = new AsyncFunction('orion', 'mod', 'require', 'log', code);
     const result = await fn(orion(), requireModule, require, log);
