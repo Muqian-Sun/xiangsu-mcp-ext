@@ -429,7 +429,7 @@ export function createServer(deps = {}) {
     },
     {
       name: 'music_list',
-      description: '列出抖音音乐：传 query 按关键词搜索，或传 category_code（music_categories 返回）看某个分类的第一页（35 首）。返回 music_id、标题、作者、时长（秒）、封面和试听链接。',
+      description: '列出抖音音乐：传 query 按关键词搜索，或传 category_code（music_categories 返回）看某个分类的第一页（35 首）。返回 music_id、标题、作者、时长（秒）、封面、试听链接和 has_copyright（音乐库给的版权标记，false 或 null 的不要用于要发布的特效）。',
       shape: {
         ...target,
         query: z.string().min(1).optional().describe('搜索关键词。'),

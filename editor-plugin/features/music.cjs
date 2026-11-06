@@ -25,6 +25,7 @@ function slimMusic(m) {
     duration_sec: m.duration ?? null,
     cover_url: (m.cover || [])[0] || null,
     preview_url: (m.fileUrl || [])[0] || null,
+    has_copyright: m.hasCopyright ?? null,
   };
 }
 

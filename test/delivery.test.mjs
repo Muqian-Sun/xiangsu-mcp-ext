@@ -154,7 +154,7 @@ function setup({ size = 1000, maxSize = 5000, sameAsTemplate = false, effectIdOk
           this.cat = cat;
         }
         async getNextMusicListForDouyin() {
-          return [{ id: 7, title: `${this.cat.selected.codeCategory}曲`, author: 'A', duration: 30, cover: ['https://c'], fileUrl: ['https://f'] }];
+          return [{ id: 7, title: `${this.cat.selected.codeCategory}曲`, author: 'A', duration: 30, cover: ['https://c'], fileUrl: ['https://f'], hasCopyright: true }];
         }
         async getNextSearchMusicListForDouyin(q) {
           return [{ id: 8, title: `${q}歌`, duration: 12 }, null];
@@ -320,7 +320,7 @@ test('music lists a category or a search and applies a track with a clip range',
   const { lib, calls } = setup();
   assert.deepEqual(await lib.musicCategories(), { categories: [{ code: 'ugc_recommend', name: '推荐' }] });
   const cat = await lib.musicList({ category_code: 'ugc_recommend' });
-  assert.deepEqual(cat.items[0], { music_id: '7', title: 'ugc_recommend曲', author: 'A', duration_sec: 30, cover_url: 'https://c', preview_url: 'https://f' });
+  assert.deepEqual(cat.items[0], { music_id: '7', title: 'ugc_recommend曲', author: 'A', duration_sec: 30, cover_url: 'https://c', preview_url: 'https://f', has_copyright: true });
   const found = await lib.musicList({ query: ' 晴天 ' });
   assert.equal(found.query, '晴天');
   assert.deepEqual(found.items.map((m) => m.music_id), ['8']);
