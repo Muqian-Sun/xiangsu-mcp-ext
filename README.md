@@ -112,7 +112,7 @@ node scripts/install.mjs   # 装到 ~/Library/Application Support/DouyinAR/Plugi
 ## 开发
 
 - `npm test`：用模拟的编辑器模块测插件逻辑；用内存传输测 MCP 工具、官方转发、工程窗口编排。
-- `node scripts/mcp-call.mjs <tool> '<json>' [...]`：新起一个服务按顺序调工具，图片落盘到临时目录。
+- `node scripts/mcp-call.mjs <tool> '<json>' [...]`：新起一个服务按顺序调工具，图片写到 `<临时目录>/xs-mcp-call/`（每次运行先清空）。
 - `node scripts/call.mjs <method> '<json>' [--pid N]`：直调插件。
 - `node scripts/e2e.mjs <工程路径> <关键词> [标题]`：搜索 + 应用 + 未知 ID 报错的端到端检查（会真的导入素材，只对测试工程用）。
 - `config.local.json` 里 `devEval: true` 时可用插件方法 `dev_eval` 在编辑器进程里执行探测代码（`scripts/call.mjs dev_eval '{}' --code-file x.js`，`scripts/dump-source.js` 可导出模块源码）。开关每次调用时读取，改回 `false` 立即失效。**日常使用保持 `false`**：它能在编辑器进程里执行任意代码。
