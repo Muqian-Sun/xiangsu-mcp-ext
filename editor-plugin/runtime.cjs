@@ -7,7 +7,7 @@ const path = require('path');
 const http = require('http');
 const crypto = require('crypto');
 
-const STATE_ROOT = path.join(os.homedir(), '.xiangsu-mcp-ext');
+const STATE_ROOT = process.env.XIANGSU_MCP_EXT_STATE || path.join(os.homedir(), '.xiangsu-mcp-ext');
 const INSTANCE_DIR = path.join(STATE_ROOT, 'instances');
 const LOG_FILE = path.join(STATE_ROOT, 'logs', 'plugin.log');
 const MAX_BODY = 4 * 1024 * 1024;
@@ -96,6 +96,7 @@ function snapshot(value, depth = 2, seen = new WeakSet()) {
 
 const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
 const LIBRARY_PATH = require.resolve('./library.cjs');
+const FEATURE_DIR = path.join(__dirname, 'features');
 
 class Runtime {
   constructor(config) {
@@ -114,9 +115,11 @@ class Runtime {
     }
   }
 
-  // Reloads library.cjs when it changed on disk; a broken edit keeps the previous version running.
+  // Reloads library.cjs (and through it the feature modules) when any of them changed on disk;
+  // a broken edit keeps the previous version running.
   refreshLibrary() {
-    const mtime = fs.statSync(LIBRARY_PATH).mtimeMs;
+    const files = [LIBRARY_PATH, ...fs.readdirSync(FEATURE_DIR).filter((f) => f.endsWith('.cjs')).map((f) => path.join(FEATURE_DIR, f))];
+    const mtime = Math.max(...files.map((f) => fs.statSync(f).mtimeMs));
     if (this.library && mtime === this.libraryMtime) return;
     delete require.cache[LIBRARY_PATH];
     let mod;

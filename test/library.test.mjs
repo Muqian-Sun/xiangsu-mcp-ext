@@ -7,6 +7,7 @@ import crypto from 'node:crypto';
 import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
+process.env.XIANGSU_MCP_EXT_STATE = fs.mkdtempSync(path.join(os.tmpdir(), 'xs-state-'));
 const { Library, M, REQUIRED } = require('../editor-plugin/library.cjs');
 
 const PKG_BYTES = Buffer.from('fake ehpackage bytes');
@@ -24,6 +25,8 @@ function item(id, title, panelKey, md5 = PKG_MD5) {
 function setup({ listItems = [item('111', '芒果脸', undefined)], listStatus = 0, active = true, importResult, downloadBytes = PKG_BYTES } = {}) {
   const shared = fs.mkdtempSync(path.join(os.tmpdir(), 'xs-lib-'));
   const calls = { download: 0, import: [], undo: [], lock: [], reload: 0, search: [] };
+  const sceneObjects = [{ name: '面部拉伸', parent: null }];
+  const sceneEditor = { id: 'scene', getAllSceneObjectEditors: () => [...sceneObjects] };
   const modules = {
     [M.nav]: {
       getDefaultNavList: () => [
@@ -85,13 +88,17 @@ function setup({ listItems = [item('111', '芒果脸', undefined)], listStatus =
           instance: {
             import: async (args) => {
               calls.import.push(args);
+              if (args.autoInstantiate && !importResult) {
+                const root = { name: '芒果脸', parent: sceneObjects[0] };
+                sceneObjects.push(root, { name: '芒果脸', parent: root });
+              }
               return importResult ?? { result: { resourceItems: [{ name: '芒果脸' }] } };
             },
           },
         },
         ResourceUndoManager: { createImportUndoID: (id) => `undo-${id}` },
       },
-      ProjectManager: { getInstance: () => ({ hasActiveProject: () => active }) },
+      ProjectManager: { getInstance: () => ({ hasActiveProject: () => active, getCurrentActiveProject: () => ({ path: shared, resourceManager: { getAllResources: () => [] } }) }) },
       PreviewSyncer: {
         getInstance: () => ({
           lockReloadSticker: (k) => calls.lock.push(`lock:${k}`),
@@ -101,7 +108,7 @@ function setup({ listItems = [item('111', '芒果脸', undefined)], listStatus =
       },
       UndoSystem: { instance: { start: (n) => calls.undo.push(`start:${n}`), end: () => calls.undo.push('end') } },
     },
-    [M.scene]: { SceneModule: { getEditingSceneService: () => ({ sceneEditor: { id: 'scene' } }) } },
+    [M.scene]: { SceneModule: { getEditingSceneService: () => ({ sceneEditor }) } },
   };
   const mod = (name) => {
     if (!(name in modules)) throw Error(`MODULE_NOT_FOUND: ${name}`);
@@ -166,16 +173,19 @@ test('apply downloads, verifies and imports through AssetPackageManager', async 
   assert.equal(args.assetPackageName, '芒果脸');
   assert.equal(args.autoInstantiate, true);
   assert.equal(args.undoID, 'undo-111');
-  assert.deepEqual(args.sceneEditor, { id: 'scene' });
+  assert.equal(args.sceneEditor.id, 'scene');
   assert.deepEqual(calls.undo, ['start:import asset library: 芒果脸', 'end']);
   assert.deepEqual(calls.lock, ['lock:ImportAssetFromAssetLibrary', 'unlock:ImportAssetFromAssetLibrary']);
   assert.equal(calls.reload, 1);
   assert.deepEqual(out.resources, [{ name: '芒果脸', path: null }]);
+  assert.deepEqual(out.added_objects, [{ name: '芒果脸', object_path: '面部拉伸/芒果脸' }]);
+  assert.deepEqual(out.package_folders, []);
 
   const again = await lib.apply({ template_id: '111', auto_instantiate: false });
   assert.equal(again.package_cached, true);
   assert.equal(calls.download, 1);
   assert.equal(calls.import[1].autoInstantiate, false);
+  assert.deepEqual(again.added_objects, []);
   assert.equal(calls.reload, 1);
 });
 
@@ -206,17 +216,26 @@ test('apply refuses without an active project', async () => {
   assert.equal(calls.download, 0);
 });
 
-test('self check passes when every required editor internal exists', () => {
+test('self check passes for the asset feature when its editor internals exist', () => {
   const { lib } = setup();
-  assert.deepEqual(lib.selfCheck(), { ok: true, missing: [] });
-  assert.ok(REQUIRED.length >= 10);
+  const check = lib.selfCheck('assets');
+  assert.deepEqual(check, { ok: true, missing: [], features: { assets: true } });
+  assert.ok(REQUIRED.assets.length >= 10);
+  const all = lib.selfCheck();
+  assert.equal(all.features.assets, true);
+  assert.equal(all.features.menu, false);
+  assert.equal(all.ok, false);
+  // The RPC layer passes a params object; an empty one must still check every feature.
+  assert.deepEqual(lib.selfCheck({}), all);
+  assert.deepEqual(lib.selfCheck({ feature: 'assets' }), check);
+  assert.throws(() => lib.selfCheck('nope'), /UNKNOWN_FEATURE: nope/);
 });
 
-test('self check names the missing internal and library calls refuse to run', async () => {
+test('self check names the missing internal and asset calls refuse to run', async () => {
   const { lib, modules } = setup();
   delete modules[M.util].downloadLokiFile;
   delete modules[M.ef].Resource.AssetPackageManager.instance.import;
-  const check = lib.selfCheck();
+  const check = lib.selfCheck('assets');
   assert.equal(check.ok, false);
   assert.deepEqual(check.missing, [`${M.util} :: downloadLokiFile`, `${M.ef} :: Resource.AssetPackageManager.instance.import`]);
   assert.throws(() => lib.nav(), /INCOMPATIBLE_EDITOR: missing .*downloadLokiFile/);
@@ -228,7 +247,7 @@ test('self check names the missing internal and library calls refuse to run', as
 test('self check reports a module that is gone entirely', () => {
   const { lib, modules } = setup();
   delete modules[M.scene];
-  const check = lib.selfCheck();
+  const check = lib.selfCheck('assets');
   assert.equal(check.ok, false);
   assert.match(check.missing.join('\n'), /Common\/Scene :: SceneModule.getEditingSceneService \(MODULE_NOT_FOUND/);
 });

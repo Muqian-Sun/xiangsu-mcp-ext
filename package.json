@@ -1,9 +1,9 @@
 {
   "name": "xiangsu-mcp-ext",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
-  "description": "MCP extension that exposes 像塑 official asset library and toolbar presets via an editor plugin",
+  "description": "MCP extension for Douyin AR (像塑): proxies the official MCP and adds official asset library, add-object menu, FaceWarpX intensity, project windows and clean removal",
   "engines": {
     "node": ">=24"
   },
@@ -14,5 +14,9 @@
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.32.2",
     "zod": "^4.6.7"
+  },
+  "license": "MIT",
+  "bin": {
+    "xiangsu-mcp-ext": "src/server.mjs"
   }
 }

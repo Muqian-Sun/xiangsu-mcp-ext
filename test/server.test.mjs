@@ -1,126 +1,185 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import http from 'node:http';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
-import { createServer, fetchImage } from '../src/server.mjs';
+import { McpError, ToolListChangedNotificationSchema } from '@modelcontextprotocol/sdk/types.js';
+import { createServer } from '../src/server.mjs';
+import { fetchImage, readImageFile } from '../src/images.mjs';
 
-async function connect(call, instances = () => [], getImage) {
-  const server = createServer(call, instances, getImage);
+const OWN = [
+  'ext_status',
+  'face_warp_list',
+  'face_warp_set_intensity',
+  'library_apply',
+  'library_list',
+  'library_nav',
+  'library_preview',
+  'library_search',
+  'menu_add',
+  'menu_list',
+  'menu_preview',
+  'object_remove',
+  'project_close',
+  'project_new',
+  'project_open',
+  'resource_delete_unused',
+];
+
+function fakeOfficial({ tools = [{ name: 'get_scene', description: 'official', inputSchema: { type: 'object' } }], call } = {}) {
+  const seen = [];
+  return {
+    seen,
+    url: 'http://official',
+    listTools: async () => tools,
+    status: () => ({ connected: true, tools: tools.length }),
+    callTool: async (name, args) => {
+      seen.push([name, args]);
+      if (call) return call(name, args);
+      return { content: [{ type: 'image', data: 'AAAA', mimeType: 'image/jpeg' }] };
+    },
+    callJson: async (name) => {
+      seen.push([name]);
+      if (name === 'list_instances') return { instances: [{ instance_id: '1', generation: '100-1', project_path: '/proj/A' }] };
+      throw Error(`unexpected ${name}`);
+    },
+  };
+}
+
+async function connect(deps) {
+  const server = createServer(deps);
   const [a, b] = InMemoryTransport.createLinkedPair();
   const client = new Client({ name: 'test', version: '0' });
   await Promise.all([server.connect(a), client.connect(b)]);
-  return client;
+  return { client, server };
 }
 
-test('tools forward to plugin methods with project selection split out', async () => {
-  const seen = [];
-  const client = await connect(async (method, params, opts) => {
-    seen.push({ method, params, opts });
-    return { ok: method };
-  });
+test('lists own tools plus the official tools, own names first', async () => {
+  const { client } = await connect({ official: fakeOfficial(), callPlugin: async () => ({}) });
   const { tools } = await client.listTools();
-  assert.deepEqual(tools.map((t) => t.name).sort(), [
-    'ext_status',
-    'face_warp_list',
-    'face_warp_set_intensity',
-    'library_apply',
-    'library_list',
-    'library_nav',
-    'library_preview',
-    'library_search',
-    'menu_add',
-    'menu_list',
-  ]);
-  const set = await client.callTool({ name: 'face_warp_set_intensity', arguments: { object_path: 'a/塑型画笔', intensity: 55, item_index: 0 } });
-  assert.deepEqual(JSON.parse(set.content[0].text), { ok: 'face_warp_set_intensity' });
-  const outOfRange = await client.callTool({ name: 'face_warp_set_intensity', arguments: { object_path: 'a', intensity: 101 } });
-  assert.equal(outOfRange.isError, true);
-  assert.equal(seen[0].method, 'face_warp_set_intensity');
-  assert.deepEqual(seen[0].params, { object_path: 'a/塑型画笔', intensity: 55, item_index: 0 });
-  assert.equal(seen.length, 1);
-  seen.length = 0;
-  const res = await client.callTool({ name: 'library_apply', arguments: { project_path: '/p', template_id: '111' } });
-  assert.equal(res.isError, undefined);
-  assert.deepEqual(JSON.parse(res.content[0].text), { ok: 'library_apply' });
-  assert.equal(seen[0].method, 'library_apply');
-  assert.deepEqual(seen[0].params, { template_id: '111' });
-  assert.equal(seen[0].opts.projectPath, '/p');
-  assert.equal(seen[0].opts.timeoutMs, 180000);
+  assert.deepEqual(tools.map((t) => t.name).slice(0, OWN.length).sort(), OWN);
+  assert.equal(tools.at(-1).name, 'get_scene');
+  assert.equal(tools.find((t) => t.name === 'library_apply').inputSchema.type, 'object');
 });
 
-test('plugin errors become MCP tool errors', async () => {
-  const client = await connect(async () => {
-    throw Error('PLUGIN_ERROR(library_apply): UNKNOWN_TEMPLATE: 1');
-  });
-  const res = await client.callTool({ name: 'library_apply', arguments: { template_id: '1' } });
+test('official tools are proxied unchanged, images included', async () => {
+  const official = fakeOfficial();
+  const { client } = await connect({ official, callPlugin: async () => ({}) });
+  const res = await client.callTool({ name: 'get_scene', arguments: { instance_id: '1' } });
+  assert.deepEqual(official.seen, [['get_scene', { instance_id: '1' }]]);
+  assert.deepEqual(res.content, [{ type: 'image', data: 'AAAA', mimeType: 'image/jpeg' }]);
+});
+
+test('official failures are reported as tool errors with their cause', async () => {
+  const down = fakeOfficial({ call: () => Promise.reject(Error('ECONNREFUSED')) });
+  const { client } = await connect({ official: down, callPlugin: async () => ({}) });
+  const res = await client.callTool({ name: 'get_scene', arguments: {} });
   assert.equal(res.isError, true);
-  assert.match(res.content[0].text, /UNKNOWN_TEMPLATE/);
+  assert.match(res.content[0].text, /OFFICIAL_MCP_UNAVAILABLE\(get_scene\): ECONNREFUSED/);
+  const bad = fakeOfficial({ call: () => Promise.reject(new McpError(-32602, 'Invalid arguments')) });
+  const c2 = (await connect({ official: bad, callPlugin: async () => ({}) })).client;
+  const res2 = await c2.callTool({ name: 'get_scene', arguments: {} });
+  assert.match(res2.content[0].text, /OFFICIAL_TOOL_ERROR\(get_scene\)/);
 });
 
-test('ext_status reports each live plugin window with its self check', async () => {
-  const client = await connect(
-    async (method, _p, opts) => {
-      if (method === 'status') return { projectPath: `/proj/${opts.pid}` };
-      assert.equal(method, 'self_check');
-      if (opts.pid === 3) throw Error('PLUGIN_ERROR(self_check): unknown method: self_check');
-      return opts.pid === 1 ? { ok: true, missing: [] } : { ok: false, missing: ['m :: f'] };
-    },
-    () => [{ pid: 1 }, { pid: 2 }, { pid: 3 }],
-  );
-  const res = await client.callTool({ name: 'ext_status', arguments: {} });
-  assert.equal(res.isError, undefined);
-  const rows = JSON.parse(res.content[0].text);
-  assert.deepEqual(rows.slice(0, 2), [
-    { pid: 1, project_path: '/proj/1', self_check: { ok: true, missing: [] } },
-    { pid: 2, project_path: '/proj/2', self_check: { ok: false, missing: ['m :: f'] } },
-  ]);
-  assert.equal(rows[2].self_check.ok, false);
-  assert.match(rows[2].self_check.error, /unknown method: self_check.*重开工程窗口/);
-});
-
-test('library_preview returns a title and image per cover, isolating per-item failures', async () => {
+test('own tools route to the plugin window by project_path or official instance_id', async () => {
   const seen = [];
-  const client = await connect(
-    async (method, params, opts) => {
-      seen.push({ method, params, opts });
-      return [
-        { template_id: '1', title: '芒果脸', cover_url: 'https://ok' },
-        { template_id: '2', title: '无图', cover_url: null },
-        { template_id: '3', title: '坏图', cover_url: 'https://bad' },
-      ];
-    },
-    () => [],
-    async (url) => {
+  const { client } = await connect({
+    official: fakeOfficial(),
+    callPlugin: async (method, params, opts) => (seen.push({ method, params, opts }), { ok: method }),
+  });
+  const a = await client.callTool({ name: 'library_apply', arguments: { project_path: '/proj/B', template_id: '111' } });
+  assert.deepEqual(JSON.parse(a.content[0].text), { ok: 'library_apply' });
+  assert.deepEqual(seen[0], { method: 'library_apply', params: { template_id: '111' }, opts: { projectPath: '/proj/B', timeoutMs: 180000 } });
+  await client.callTool({ name: 'face_warp_set_intensity', arguments: { instance_id: '1', object_path: 'a/塑型画笔', intensity: 55 } });
+  assert.deepEqual(seen[1], { method: 'face_warp_set_intensity', params: { object_path: 'a/塑型画笔', intensity: 55 }, opts: { projectPath: '/proj/A', timeoutMs: undefined } });
+  const unknown = await client.callTool({ name: 'menu_list', arguments: { instance_id: '7' } });
+  assert.match(unknown.content[0].text, /UNKNOWN_INSTANCE: 7/);
+  assert.equal(seen.length, 2);
+});
+
+test('invalid arguments are rejected before reaching the plugin', async () => {
+  const seen = [];
+  const { client } = await connect({ official: fakeOfficial(), callPlugin: async (m) => (seen.push(m), {}) });
+  const res = await client.callTool({ name: 'face_warp_set_intensity', arguments: { object_path: 'a', intensity: 101 } });
+  assert.equal(res.isError, true);
+  assert.match(res.content[0].text, /INVALID_ARGUMENTS\(face_warp_set_intensity\): intensity/);
+  const extra = await client.callTool({ name: 'library_search', arguments: { query: 'x', bogus: 1 } });
+  assert.equal(extra.isError, true);
+  assert.deepEqual(seen, []);
+});
+
+test('library_preview and menu_preview return a caption and an image per item, isolating failures', async () => {
+  const { client } = await connect({
+    official: fakeOfficial(),
+    callPlugin: async (method) =>
+      method === 'library_covers'
+        ? [
+            { template_id: '1', title: '芒果脸', cover_url: 'https://ok' },
+            { template_id: '2', title: '无图', cover_url: null },
+            { template_id: '3', title: '坏图', cover_url: 'https://bad' },
+          ]
+        : [
+            { menu_id: 'smokey', name: '烟熏妆', description: '一键烟熏妆', image_url: null, image_file: '/hover/smokey.png' },
+            { menu_id: 'x', name: '无图项', description: '', image_url: null, image_file: null },
+          ],
+    fetchImage: async (url) => {
       if (url === 'https://bad') throw Error('HTTP 404');
       return { data: 'AAAA', mimeType: 'image/png' };
     },
-  );
-  const res = await client.callTool({ name: 'library_preview', arguments: { project_path: '/p', template_ids: ['1', '2', '3'] } });
-  assert.equal(res.isError, undefined);
-  assert.deepEqual(seen[0], { method: 'library_covers', params: { template_ids: ['1', '2', '3'] }, opts: { projectPath: '/p' } });
-  assert.deepEqual(res.content, [
+    readImageFile: async (file) => ({ data: Buffer.from(file).toString('base64'), mimeType: 'image/gif' }),
+  });
+  const lib = await client.callTool({ name: 'library_preview', arguments: { template_ids: ['1', '2', '3'] } });
+  assert.deepEqual(lib.content, [
     { type: 'text', text: '芒果脸（template_id 1）' },
     { type: 'image', data: 'AAAA', mimeType: 'image/png' },
     { type: 'text', text: '无图（template_id 2）' },
     { type: 'text', text: '无封面图' },
     { type: 'text', text: '坏图（template_id 3）' },
-    { type: 'text', text: '封面下载失败：HTTP 404' },
+    { type: 'text', text: '图片读取失败：HTTP 404' },
+  ]);
+  const menu = await client.callTool({ name: 'menu_preview', arguments: { menu_ids: ['smokey', 'x'] } });
+  assert.deepEqual(menu.content, [
+    { type: 'text', text: '烟熏妆（menu_id smokey）：一键烟熏妆' },
+    { type: 'image', data: Buffer.from('/hover/smokey.png').toString('base64'), mimeType: 'image/gif' },
+    { type: 'text', text: '无图项（menu_id x）' },
+    { type: 'text', text: '无示意图' },
   ]);
 });
 
-test('library_preview surfaces plugin errors and enforces the 8-item limit', async () => {
-  const client = await connect(async () => {
-    throw Error('PLUGIN_ERROR(library_covers): UNKNOWN_TEMPLATE: 9');
+test('ext_status reports the official connection and each window with instance id and self check', async () => {
+  const { client } = await connect({
+    official: fakeOfficial(),
+    listInstances: () => [{ pid: 100 }, { pid: 101 }],
+    callPlugin: async (method, _p, opts) => {
+      if (method === 'status') return { projectPath: `/proj/${opts.pid}` };
+      if (opts.pid === 101) throw Error('PLUGIN_ERROR(self_check): unknown method: self_check');
+      return { ok: true, missing: [] };
+    },
   });
-  const res = await client.callTool({ name: 'library_preview', arguments: { template_ids: ['9'] } });
-  assert.equal(res.isError, true);
-  assert.match(res.content[0].text, /UNKNOWN_TEMPLATE/);
-  const tooMany = await client.callTool({ name: 'library_preview', arguments: { template_ids: Array(9).fill('1') } });
-  assert.equal(tooMany.isError, true);
+  const res = JSON.parse((await client.callTool({ name: 'ext_status', arguments: {} })).content[0].text);
+  assert.deepEqual(res.official, { connected: true, tools: 1 });
+  assert.deepEqual(res.windows[0], { pid: 100, project_path: '/proj/100', instance_id: '1', self_check: { ok: true, missing: [] } });
+  assert.equal(res.windows[1].instance_id, null);
+  assert.match(res.windows[1].self_check.error, /unknown method: self_check.*重开工程窗口/);
 });
 
-test('fetchImage sniffs real image bytes and rejects non-images', async (t) => {
+test('a change in the official tool list is pushed to clients', async () => {
+  const official = fakeOfficial();
+  const { client } = await connect({ official, callPlugin: async () => ({}) });
+  let notified = 0;
+  client.setNotificationHandler(ToolListChangedNotificationSchema, () => {
+    notified += 1;
+  });
+  official.onToolsChanged();
+  await new Promise((r) => setTimeout(r, 20));
+  assert.equal(notified, 1);
+});
+
+test('image helpers sniff real bytes from URLs and files and reject non-images', async (t) => {
   const png = Buffer.from('89504e470d0a1a0a0000000d49484452', 'hex');
   const webp = Buffer.concat([Buffer.from('RIFF'), Buffer.alloc(4), Buffer.from('WEBPVP8 ')]);
   const srv = http.createServer((req, res) => {
@@ -136,4 +195,9 @@ test('fetchImage sniffs real image bytes and rejects non-images', async (t) => {
   assert.equal((await fetchImage(`${base}/webp`)).mimeType, 'image/webp');
   await assert.rejects(fetchImage(`${base}/html`), /not a png\/jpeg\/gif\/webp image/);
   await assert.rejects(fetchImage(`${base}/missing`), /HTTP 404/);
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'xs-img-'));
+  fs.writeFileSync(path.join(dir, 'a.gif'), 'GIF89a....');
+  fs.writeFileSync(path.join(dir, 'b.txt'), 'hello');
+  assert.equal((await readImageFile(path.join(dir, 'a.gif'))).mimeType, 'image/gif');
+  await assert.rejects(readImageFile(path.join(dir, 'b.txt')), /not a png/);
 });

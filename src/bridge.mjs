@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-const INSTANCE_DIR = path.join(os.homedir(), '.xiangsu-mcp-ext', 'instances');
+const INSTANCE_DIR = path.join(process.env.XIANGSU_MCP_EXT_STATE || path.join(os.homedir(), '.xiangsu-mcp-ext'), 'instances');
 
 function alive(pid) {
   try {
