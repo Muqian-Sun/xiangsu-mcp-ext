@@ -6,7 +6,6 @@ import path from 'node:path';
 import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
-process.env.XIANGSU_MCP_EXT_STATE = tmpdir('xs-state-');
 const { Runtime } = require('../editor-plugin/runtime.cjs');
 const LIBRARY = require.resolve('../editor-plugin/library.cjs');
 

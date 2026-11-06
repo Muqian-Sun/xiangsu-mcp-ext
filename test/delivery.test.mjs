@@ -11,7 +11,6 @@ import { prepareIcon, ICON_SIZE } from '../src/icons.mjs';
 import { sniffImage } from '../src/images.mjs';
 
 const require = createRequire(import.meta.url);
-process.env.XIANGSU_MCP_EXT_STATE = tmpdir('xs-state-');
 const { Library, M } = require('../editor-plugin/library.cjs');
 
 class Bus {
@@ -406,7 +405,7 @@ async function connect(deps) {
     status: () => ({}),
     callJson: async (name) => (name === 'list_instances' ? { instances: [] } : {}),
   };
-  const server = createServer({ official, sleep: async () => {}, openTimeoutMs: 50, closeTimeoutMs: 50, instanceTimeoutMs: 0, ...deps });
+  const server = createServer({ official, listInstances: () => [{ pid: 1 }], sleep: async () => {}, openTimeoutMs: 50, closeTimeoutMs: 50, instanceTimeoutMs: 0, ...deps });
   const [a, b] = InMemoryTransport.createLinkedPair();
   const client = new Client({ name: 'test', version: '0' });
   await Promise.all([server.connect(a), client.connect(b)]);

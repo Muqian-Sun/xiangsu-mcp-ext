@@ -13,7 +13,6 @@ import { createServer } from '../src/server.mjs';
 import { DOWNLOAD_TTL_MS, Downloads, checkTarget, copyProject, editorRoot, outlineProject } from '../src/works.mjs';
 
 const require = createRequire(import.meta.url);
-process.env.XIANGSU_MCP_EXT_STATE = tmpdir('xs-state-');
 const { Library, M, WORK_SORTS } = require('../editor-plugin/library.cjs');
 
 function work(id, title, { effectId = 90686370, file = true } = {}) {
