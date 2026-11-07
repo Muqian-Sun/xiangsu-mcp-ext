@@ -199,11 +199,12 @@ export function createServer(deps = {}) {
     const { project_path, instance_id, ...params } = args;
     return text(await d.callPlugin(method, params, await homeWindow({ project_path, instance_id })));
   };
+  const workSort = z.enum(['suggest', 'latest', 'effect_usage', 'project_usage']).optional().describe('排序：suggest 推荐（默认）、latest 最新、effect_usage 特效使用量、project_usage 工程使用量。');
   const workPage = {
     category_id: z.string().optional().describe('works_nav 返回的分类 ID；省略时用第一个分类（推荐）。'),
-    cursor: z.number().int().min(0).optional().describe('翻页游标，取上一页的 next_cursor。'),
+    cursor: z.string().min(1).optional().describe('翻页游标，原样取上一页的 next_cursor；最后一页的 next_cursor 是 null。'),
     count: z.number().int().min(1).max(100).optional().describe('每页数量，默认 30。'),
-    sort: z.enum(['suggest', 'latest', 'effect_usage', 'project_usage']).optional().describe('排序：suggest 推荐（默认）、latest 最新、effect_usage 特效使用量、project_usage 工程使用量。'),
+    sort: workSort,
   };
 
   const tools = [
@@ -344,14 +345,23 @@ export function createServer(deps = {}) {
     },
     {
       name: 'works_search',
-      description: '按作品名搜索首页作品（与首页搜索框同一个接口，限定在一个分类内，默认推荐）。返回字段同 works_list。按特效 ID 查用 works_by_effect。',
-      shape: { ...target, query: z.string().min(1).describe('作品名关键词，如「合掌」「转场」「换装」。'), ...workPage },
+      description:
+        '按作品名搜索首页作品（与首页搜索框同一个接口）。不给 category_id 时搜全部分类并合并去重：「推荐」翻到底只有约 300 条，「美化」「友友天地」等分类里还有它没有的作品。合并顺序是先「推荐」里的（按 sort），再按分类顺序追加只在其它分类出现的；每个分类最多 300 条。每条带 found_in（出现在哪些分类），另返回 total、by_category（各分类条数）。queries 一次搜多个词（最多 8 个）并合并，每条带 matched_queries。按 offset / count 分页，结果缓存 10 分钟，翻页不重新请求。某个分类翻页时服务端一直给同一页，会列在 incomplete 里。其余字段同 works_list。按特效 ID 查用 works_by_effect。',
+      shape: {
+        ...target,
+        query: z.string().min(1).optional().describe('作品名关键词，如「合掌」「转场」「换装」。与 queries 二选一。'),
+        queries: z.array(z.string().min(1)).min(1).max(8).optional().describe('一次搜多个词并合并，如 ["头套", "头饰"]。与 query 二选一。'),
+        category_id: z.string().optional().describe('只搜这个分类（works_nav 返回的分类 ID）；省略时搜全部分类。'),
+        offset: z.number().int().min(0).optional().describe('分页起点，取上一页的 next_offset；默认 0。'),
+        count: z.number().int().min(1).max(200).optional().describe('每页数量，默认 30。'),
+        sort: workSort,
+      },
       run: works('works_search'),
     },
     {
       name: 'works_by_effect',
       description:
-        '按特效 ID 查排行榜等处给出的特效（rank_list / rank_subjects / rank_innovation_picks 的 effect_id）在首页有没有工程，与首页搜索框「特效ID」搜索同一个接口。逐个返回 status：found 首页有这个特效的工程；same_name 首页没有它、只有同名作品（effect_id 不同，可能是别人的同名作品，不能当成同一个特效）；not_on_homepage 作者没把工程分享到首页，拿不到工程。found 和 same_name 的作品在 items 里（字段同 works_list），template_id 可直接用于 works_download / works_open。每个特效一到两次请求，20 个约 10 秒。',
+        '按特效 ID 查排行榜等处给出的特效（rank_list / rank_subjects / rank_innovation_picks 的 effect_id）在首页有没有工程，与首页搜索框「特效ID」搜索同一个接口。逐个返回 status：found 首页有这个特效的工程；same_name 首页没有它、只有同名作品（effect_id 不同，可能是别人的同名作品，不能当成同一个特效）；not_on_homepage 作者没把工程分享到首页，拿不到工程。found 和 same_name 的作品在 items 里（字段同 works_list），template_id 可直接用于 works_download / works_open。默认在「推荐」里查：按特效 ID 查时「推荐」也能查到只在其它分类出现的作品，在别的分类里按 ID 查反而查不到，所以一般不用给 category_id。每个特效一到两次请求，20 个约 6 秒。',
       shape: {
         ...target,
         effects: z

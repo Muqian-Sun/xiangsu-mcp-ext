@@ -16,6 +16,40 @@ const MAX_EFFECTS = 20;
 const SEARCH_BUSY = 28;
 const SEARCH_RETRIES = 2;
 const SEARCH_RETRY_MS = 500;
+// Measured on 2026-11-07: a search in 推荐 stops after about 300 matches (6 pages of 50), and the other
+// categories hold works 推荐 never returns. A search therefore asks every category, each up to this many.
+const SEARCH_CAP = 300;
+const SEARCH_PAGE = 50;
+// Picked, not measured beyond the runs noted at worksSearchAll: one more pass when the first falls short.
+const SEARCH_PASSES = 2;
+const MAX_TERMS = 8;
+// Picked, not measured: long enough to page through one search, short enough that new works show up.
+const CACHE_MS = 10 * 60 * 1000;
+const CACHE_ENTRIES = 20;
+
+// The homepage pages with the cursor plus the previous page's sortingPosition and version, as the home
+// window's GeneralTemplatesListModel sends them; with the cursor alone every page is the first one again.
+function pageState(info) {
+  if (!info.hasNext) return null;
+  const state = { cursor: info.cursor };
+  if (info.sortingPosition !== undefined) state.sortingPosition = info.sortingPosition;
+  if (info.version !== undefined) state.version = info.version;
+  return state;
+}
+
+const encodeCursor = (state) => (state ? Buffer.from(JSON.stringify(state)).toString('base64url') : null);
+
+function decodeCursor(cursor) {
+  if (cursor === undefined) return { cursor: 0 };
+  let state;
+  try {
+    state = JSON.parse(Buffer.from(String(cursor), 'base64url').toString('utf8'));
+  } catch (_) {
+    state = null;
+  }
+  if (!state || !Number.isInteger(state.cursor) || state.cursor < 0) throw Error(`INVALID_CURSOR: ${cursor}; pass the previous page's next_cursor as is`);
+  return state;
+}
 
 function slimWork(t, transform) {
   const w = transform(t, '');
@@ -63,22 +97,25 @@ const methods = {
   worksPage(info) {
     const transform = this.mod(M.worksUtil).transformTemplate;
     const raw = (info.template || []).filter((t) => t && t.templateId);
-    return { items: raw.map((t) => slimWork(t, transform)), raw, next_cursor: info.cursor ?? null, has_more: !!info.hasNext };
+    const next = pageState(info);
+    return { items: raw.map((t) => slimWork(t, transform)), raw, next, has_more: !!next };
   },
 
-  async worksList({ category_id, cursor = 0, count = 30, sort } = {}) {
+  async worksList({ category_id, cursor, count = 30, sort } = {}) {
     const ranker = sortValue(sort);
+    const state = decodeCursor(cursor);
     const category = await this.worksCategory(category_id);
     const data = body(
-      await this.mod(M.worksCategory).apiTemplatesCategory({ cursor, count, panelKey: PANEL_KEY, categoryId: category.id, ranker, getCollectStatus: true }),
+      await this.mod(M.worksCategory).apiTemplatesCategory({ ...state, count, panelKey: PANEL_KEY, categoryId: category.id, ranker, getCollectStatus: true }),
       'GET_WORKS_LIST',
     );
-    return { category, ...this.worksPage(data.dataInfos || {}) };
+    const { next, ...page } = this.worksPage(data.dataInfos || {});
+    return { category, ...page, next_cursor: encodeCursor(next) };
   },
 
-  // Same request the homepage search box sends, scoped to one category.
-  async worksSearchPage(category, word, by, { cursor = 0, count = 30, ranker = SORT.suggest } = {}) {
-    const params = { cursor, count, panelKey: PANEL_KEY, categoryId: category.id, ranker, getCollectStatus: true, searchWord: word, searchType: SEARCH_BY[by] };
+  // Same request the homepage search box sends, scoped to one category; `state` is where the page starts.
+  async worksSearchPage(category, word, by, { state = { cursor: 0 }, count = SEARCH_PAGE, ranker = SORT.suggest } = {}) {
+    const params = { ...state, count, panelKey: PANEL_KEY, categoryId: category.id, ranker, getCollectStatus: true, searchWord: word, searchType: SEARCH_BY[by] };
     let res;
     for (let i = 0; ; i++) {
       res = await this.mod(M.worksCategory).apiSearchTemplatesCategory(params);
@@ -88,19 +125,98 @@ const methods = {
     return this.worksPage(body(res, 'SEARCH_WORKS').dataInfos || {});
   },
 
-  // Matched on the project name, like the homepage search box's default 特效名称 option.
-  async worksSearch({ query, category_id, cursor, count, sort } = {}) {
-    if (typeof query !== 'string' || !query.trim()) throw Error('INVALID_QUERY: query must be a non-empty string');
+  // Every match of `word` in one category, up to SEARCH_CAP, in the server's order. The server now and
+  // then ends a pass early (6 passes of 头套 in 推荐 on 2026-11-07: five reached the cap, one stopped at
+  // 249; another stopped at 84), so a pass short of the cap is run once more and the two are merged.
+  async worksSearchAll(category, word, by, ranker) {
+    const items = [];
+    const raw = [];
+    const seen = new Set();
+    let stalled = false;
+    for (let pass = 0; pass < SEARCH_PASSES && items.length < SEARCH_CAP; pass++) {
+      const inPass = new Set();
+      let state = { cursor: 0 };
+      stalled = false;
+      while (state && items.length < SEARCH_CAP) {
+        const page = await this.worksSearchPage(category, word, by, { state, ranker });
+        const before = inPass.size;
+        page.items.forEach((w, i) => {
+          inPass.add(w.template_id);
+          if (seen.has(w.template_id)) return;
+          seen.add(w.template_id);
+          items.push(w);
+          raw.push(page.raw[i]);
+        });
+        // A page with nothing this pass has not seen means the server is handing the same page back.
+        stalled = !!page.next && inPass.size === before;
+        state = stalled ? null : page.next;
+      }
+    }
+    return { items: items.slice(0, SEARCH_CAP), raw: raw.slice(0, SEARCH_CAP), stalled };
+  },
+
+  // Matched on the project name, like the homepage search box's default 特效名称 option. Without a
+  // category every category is searched; works are merged in the order 推荐 returns them, then the
+  // ones only other categories have, category by category (sort applies within each category).
+  async worksSearch({ query, queries, category_id, offset = 0, count = 30, sort } = {}) {
+    if (query !== undefined && queries !== undefined) throw Error('INVALID_QUERY: pass query or queries, not both');
+    const list = queries !== undefined ? queries : query !== undefined ? [query] : [];
+    if (!Array.isArray(list) || !list.length || list.length > MAX_TERMS) throw Error(`INVALID_QUERY: pass query, or 1-${MAX_TERMS} queries`);
+    const terms = list.map((q) => (typeof q === 'string' ? q.trim() : ''));
+    if (terms.some((q) => !q)) throw Error('INVALID_QUERY: every query must be a non-empty string');
+    const unique = [...new Set(terms)];
     const ranker = sortValue(sort);
-    const category = await this.worksCategory(category_id);
-    const q = query.trim();
-    return { query: q, category, ...(await this.worksSearchPage(category, q, 'name', { cursor, count, ranker })) };
+    const categories = category_id === undefined ? (await this.worksNav()).categories : [await this.worksCategory(category_id)];
+    const key = JSON.stringify({ unique, category_id, ranker });
+    this.worksCache = this.worksCache || new Map();
+    const hit = this.worksCache.get(key);
+    let merged = hit && Date.now() - hit.at < CACHE_MS ? hit.value : null;
+    if (!merged) {
+      const rows = new Map();
+      const incomplete = new Set();
+      for (const term of unique) {
+        const found = await Promise.all(categories.map((c) => this.worksSearchAll(c, term, 'name', ranker)));
+        found.forEach((page, k) => page.stalled && incomplete.add(categories[k].name));
+        found.forEach((page, k) =>
+          page.items.forEach((w, i) => {
+            const row = rows.get(w.template_id) || { w, raw: page.raw[i], found_in: new Set(), matched: new Set() };
+            row.found_in.add(categories[k].name);
+            row.matched.add(term);
+            rows.set(w.template_id, row);
+          }),
+        );
+      }
+      const all = [...rows.values()];
+      const counts = categories.map((c) => ({ id: c.id, name: c.name, count: all.filter((r) => r.found_in.has(c.name)).length }));
+      merged = {
+        items: all.map((r) => ({ ...r.w, found_in: [...r.found_in], ...(queries !== undefined ? { matched_queries: [...r.matched] } : {}) })),
+        raw: all.map((r) => r.raw),
+        by_category: counts.filter((c) => c.count),
+        incomplete: [...incomplete],
+      };
+      this.worksCache.set(key, { at: Date.now(), value: merged });
+      while (this.worksCache.size > CACHE_ENTRIES) this.worksCache.delete(this.worksCache.keys().next().value);
+    }
+    const end = offset + count;
+    return {
+      ...(queries !== undefined ? { queries: unique } : { query: unique[0] }),
+      ...(category_id !== undefined ? { category: categories[0] } : {}),
+      total: merged.items.length,
+      items: merged.items.slice(offset, end),
+      raw: merged.raw.slice(offset, end),
+      next_offset: end < merged.items.length ? end : null,
+      has_more: end < merged.items.length,
+      by_category: merged.by_category,
+      ...(merged.incomplete.length ? { incomplete: merged.incomplete } : {}),
+    };
   },
 
   // Effects (effect_id and optional name, as rank boards list them) looked up one by one with the
   // homepage's 特效ID search. A work matches an effect only on its effect_id. An effect without one may
   // still have homepage works of the same name (another creator's copy, or a re-upload); those come
-  // back as same_name candidates, never as the effect itself.
+  // back as same_name candidates, never as the effect itself. Unlike the name search, the 特效ID search
+  // in 推荐 covers works the name search only finds in other categories (8 of 8 checked on 2026-11-07;
+  // the same ids searched in their own category found none), so 推荐 alone is asked.
   async worksByEffect({ effects, category_id } = {}) {
     if (!Array.isArray(effects) || !effects.length || effects.length > MAX_EFFECTS) throw Error(`INVALID_EFFECTS: pass 1-${MAX_EFFECTS} effects`);
     const items = [];
@@ -171,4 +287,4 @@ const METHODS = {
   works_download: 'worksDownload',
 };
 
-module.exports = { methods, METHODS, SORT, MAX_EFFECTS };
+module.exports = { methods, METHODS, SORT, MAX_EFFECTS, MAX_TERMS };

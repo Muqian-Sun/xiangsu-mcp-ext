@@ -39,7 +39,7 @@ function setup({ download = { status: 'success', unzipPath: '/tmp/CreatedFromTem
     [M.worksCategory]: {
       apiTemplatesCategory: async (p) => {
         calls.list.push(p);
-        return { body: { statusCode: 0, data: { dataInfos: { template: [work('1', 'AI 修仙合掌转场'), work('2', '人鱼公主', { effectId: '' })], cursor: 2, hasNext: true } } } };
+        return { body: { statusCode: 0, data: { dataInfos: { template: [work('1', 'AI 修仙合掌转场'), work('2', '人鱼公主', { effectId: '' })], cursor: 2, sortingPosition: 2, version: 'v9', hasNext: true } } } };
       },
       // searchType 2 is the 特效ID search; the server may also answer it with works of other effects.
       apiSearchTemplatesCategory: async (p) => {
@@ -130,13 +130,17 @@ test('works_list defaults to the first category, maps sort to the ranker and sli
   assert.equal(out.items[1].publish_count, null);
   assert.deepEqual(out.raw.map((t) => t.templateId), ['1', '2']);
   assert.ok(out.raw[0].businessExtra.fileMap.f.url);
-  assert.equal(out.next_cursor, 2);
+  assert.equal(calls.list[0].cursor, 0);
+  assert.equal(typeof out.next_cursor, 'string');
   assert.equal(out.has_more, true);
-  await lib.worksList({ category_id: '40669', sort: 'latest', cursor: 2, count: 5 });
+  // The next page needs the previous page's sortingPosition and version, not just the cursor.
+  await lib.worksList({ category_id: '40669', sort: 'latest', cursor: out.next_cursor, count: 5 });
   assert.deepEqual(
-    { c: calls.list[1].categoryId, r: calls.list[1].ranker, cur: calls.list[1].cursor, n: calls.list[1].count },
-    { c: '40669', r: 2, cur: 2, n: 5 },
+    { c: calls.list[1].categoryId, r: calls.list[1].ranker, cur: calls.list[1].cursor, sp: calls.list[1].sortingPosition, v: calls.list[1].version, n: calls.list[1].count },
+    { c: '40669', r: 2, cur: 2, sp: 2, v: 'v9', n: 5 },
   );
+  await assert.rejects(lib.worksList({ cursor: '2' }), /INVALID_CURSOR: 2; pass the previous page's next_cursor as is/);
+  await assert.rejects(lib.worksList({ cursor: 'not-a-token' }), /INVALID_CURSOR/);
   await assert.rejects(lib.worksList({ category_id: '9' }), /INVALID_CATEGORY_ID: 9; valid: 44668\(推荐\), 40669\(官方工程\)/);
   await assert.rejects(lib.worksList({ sort: 'hot' }), /INVALID_SORT: hot/);
 });
@@ -198,13 +202,13 @@ test('works_search sends a search again when the server answers busy (statusCode
   assert.equal(out.effects[0].status, 'found');
   assert.equal(calls.search.length, 3);
   busy = 3;
-  await assert.rejects(lib.worksSearch({ query: '合掌' }), /SEARCH_WORKS_FAILED: statusCode=28/);
+  await assert.rejects(lib.worksSearch({ query: '合掌', category_id: '44668' }), /SEARCH_WORKS_FAILED: statusCode=28/);
   assert.equal(calls.search.length, 6);
   modules[M.worksCategory].apiSearchTemplatesCategory = async (p) => {
     calls.search.push(p);
     return { body: { statusCode: 5, message: 'other' } };
   };
-  await assert.rejects(lib.worksSearch({ query: '合掌' }), /statusCode=5/);
+  await assert.rejects(lib.worksSearch({ query: '合掌', category_id: '44668' }), /statusCode=5/);
   assert.equal(calls.search.length, 7);
 });
 
