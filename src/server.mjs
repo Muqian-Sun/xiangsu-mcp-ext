@@ -658,7 +658,7 @@ export function createServer(deps = {}) {
     {
       name: 'object_remove',
       description:
-        '删除一个场景对象（含子对象，可撤销），并找出只被它使用的工程资源：删除前后对比场景引用，删除前被引用、删除后不再被引用的即为孤儿（unused_paths 已合并到素材包文件夹）。delete_unused_resources=true 时一并删除这些资源（资源删除不可撤销）；默认只报告，可之后用 resource_delete_unused 删除。object_path 用完整层级路径或能唯一定位的末尾几段（渲染组本身请用官方 delete_render_group）。',
+        '删除一个场景对象（含子对象，可撤销），并找出只被它使用的工程资源：删除前后对比场景引用，删除前被引用、删除后不再被引用的即为孤儿（unused_paths 已合并到素材包文件夹，只含磁盘上存在的路径）。editor_only_paths 是素材放进场景时编辑器按对象名建的文件夹（如「复古清冷_滤镜」），只在编辑器里、尚未写到磁盘，对象删除后下次保存就会消失，不用删。delete_unused_resources=true 时一并删除 unused_paths（资源删除不可撤销）；默认只报告，可之后用 resource_delete_unused 删除。object_path 用完整层级路径或能唯一定位的末尾几段（渲染组本身请用官方 delete_render_group）。',
       shape: {
         ...target,
         object_path: z.string().min(1).describe('对象的层级路径，如「面部拉伸/小屁桃_美型」，或能唯一定位的末尾几段。'),
