@@ -131,7 +131,7 @@ test('list validates panel and category, slims and paginates', async () => {
   const out = await lib.list({ panel_key: '3d_distortion' });
   assert.equal(calls.listParams.categoryIds, JSON.stringify(['45001']));
   assert.equal(out.category_id, '45001');
-  assert.deepEqual(out.items[0], { template_id: '111', title: '芒果脸', panel_key: '3d_distortion', desc: '', material_type: '3DModel', file_size: PKG_BYTES.length, cover_url: 'https://cdn/111.png' });
+  assert.deepEqual(out.items[0], { template_id: '111', title: '芒果脸', panel_key: '3d_distortion', kind: 'package', desc: '', material_type: '3DModel', file_size: PKG_BYTES.length, cover_url: 'https://cdn/111.png' });
   assert.equal(out.next_cursor, 30);
   assert.equal(out.has_more, true);
 });

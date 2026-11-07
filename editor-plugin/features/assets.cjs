@@ -5,6 +5,7 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 const { M, body, editingScene, sceneObjectSet, addedObjectEditors, sceneObjectPath, projectResources, packageRootsAdded, recordImport } = require('./common.cjs');
+const { SQUARE_PANEL } = require('./square.cjs');
 
 // Editor internals each feature relies on; checked up front so an editor upgrade fails with a precise list.
 const REQUIRED = {
@@ -23,6 +24,24 @@ const REQUIRED = {
     [M.ef, 'UndoSystem.instance.start'],
     [M.ef, 'UndoSystem.instance.end'],
     [M.scene, 'SceneModule.getEditingSceneService'],
+  ],
+  square: [
+    [M.aiCategory, 'getAIAssetCategory'],
+    [M.aiList, 'getAIAssetList'],
+    [M.aiConst, 'AIAssetCategory.AIPicture'],
+    [M.aiConst, 'AIAssetCategory.AIMakeup'],
+    [M.aiConst, 'AIAssetCategory.UGCGAN'],
+    [M.publish, 'PublishType.AiImage'],
+    [M.publish, 'PublishType.AiMakeup'],
+    [M.publish, 'PublishType.NormalAsset'],
+    [M.resourceTypes, 'resourceType.Ehpackage'],
+    [M.importTypes, 'ImportAssetType.Foreground'],
+    [M.assetsLibrary, 'AssetsLibrary.getInstance'],
+    [M.collect, 'getCollections'],
+    [M.navConst, 'NavItemKey.DouyinMusicAssets'],
+    [M.navConst, 'NavItemKey.karaokeMusicAssets'],
+    [M.secondPanel, 'getAssetsSecondPanel'],
+    [M.aiEffectApi, 'getDYEHFileUrls'],
   ],
   menu: [
     [M.orionui, 'I18n.t'],
@@ -107,18 +126,21 @@ const REQUIRED = {
   ],
 };
 
-// Only plain asset lists can be applied; AI generation panels (妆容/图片/视频/实时变脸 UGC) cost quota
-// and use a different flow, so they are not exposed.
-const APPLICABLE_TYPE = 'GeneralAssetsList';
+// Plain asset lists, 素材广场 and 收藏 can be applied; AI generation panels (妆容/图片/视频/实时变脸 UGC)
+// cost quota and use a different flow, so they are not exposed.
+const PANEL_KINDS = { GeneralAssetsList: 'general', AssetsSquareList: 'square', CollectionAssetsList: 'collection' };
 
-function slim(item) {
+function slim(item, kind) {
   const extra = item.businessExtra || {};
   const file = Object.values(extra.fileMap || {})[0] || {};
-  const cover = Object.values(extra.coverMap || {})[0] || {};
+  const covers = Object.values(extra.coverMap || {});
+  // Square cards keep a still and an animated cover; the still one is the preview image.
+  const cover = covers.find((c) => c && c.iconType === 'image/png') || covers[0] || {};
   return {
     template_id: String(item.templateId),
     title: item.title,
     panel_key: item.panelKey || null,
+    kind,
     desc: item.desc || '',
     material_type: extra.originalMaterialType || null,
     file_size: file.fileSize ?? null,
@@ -164,9 +186,13 @@ class Library {
 
   // Windows open and close while an agent works, so the plugin keeps no library state: the raw
   // records go back with the slim items and the MCP server hands one back to library_apply.
+  // Square cards with nothing to apply are left out and counted.
   page(items) {
-    const raw = items.filter((it) => it && it.templateId);
-    return { items: raw.map(slim), raw };
+    const rows = items.filter((it) => it && it.templateId).map((it) => [it, this.assetKind(it)]);
+    const raw = rows.filter(([, kind]) => kind).map(([it]) => it);
+    const out = { items: rows.filter(([, kind]) => kind).map(([it, kind]) => slim(it, kind)), raw };
+    const unsupported = rows.length - raw.length;
+    return unsupported ? { ...out, unsupported } : out;
   }
 
   navEntries() {
@@ -175,10 +201,9 @@ class Library {
     for (const group of groups) {
       for (const item of group) {
         const children = item.children || [];
-        if (children.length) {
-          for (const c of children) out.push({ panel_key: c.id, name: c.name, group: item.name, applicable: c.componentType === APPLICABLE_TYPE });
-        } else {
-          out.push({ panel_key: item.id, name: item.name, group: null, applicable: item.componentType === APPLICABLE_TYPE });
+        for (const c of children.length ? children : [item]) {
+          const kind = PANEL_KINDS[c.componentType] || null;
+          out.push({ panel_key: c.id, name: c.name, group: children.length ? item.name : null, kind, applicable: !!kind });
         }
       }
     }
@@ -187,35 +212,43 @@ class Library {
 
   nav() {
     this.ensureCompatible();
-    return { panels: this.navEntries().filter((e) => e.applicable) };
+    return { panels: this.navEntries().filter((e) => e.applicable).map(({ applicable, ...e }) => e) };
   }
 
-  async list({ panel_key, category_id, cursor = 0, count = 30 }) {
+  async list({ panel_key, category_id, cursor, count = 30 }) {
     this.ensureCompatible();
-    const valid = this.nav().panels.map((p) => p.panel_key);
-    if (!valid.includes(panel_key)) throw Error(`INVALID_PANEL_KEY: ${panel_key}; valid: ${valid.join(', ')}`);
+    const panels = this.nav().panels;
+    const panel = panels.find((p) => p.panel_key === panel_key);
+    if (!panel) throw Error(`INVALID_PANEL_KEY: ${panel_key}; valid: ${panels.map((p) => p.panel_key).join(', ')}`);
+    if (panel.kind === 'collection') return this.collectionList({ category_id, cursor });
+    if (cursor !== undefined && !(Number.isInteger(cursor) && cursor >= 0)) throw Error(`INVALID_CURSOR: ${cursor}; panel ${panel_key} pages by a numeric cursor`);
+    if (panel.kind === 'square') return this.squareList({ category_id, cursor: cursor || 0, count });
     const catData = body(await this.mod(M.category).getAssetCategory({ cursor: 0, count: 50, panelKey: panel_key }), 'GET_CATEGORY');
     const categories = (catData.categories || []).map((c) => ({ id: String(c.id), name: c.name }));
     if (!categories.length) throw Error(`NO_CATEGORIES: panel ${panel_key} returned no categories`);
     const catId = category_id === undefined ? categories[0].id : String(category_id);
     if (!categories.some((c) => c.id === catId)) throw Error(`INVALID_CATEGORY_ID: ${category_id}; valid: ${categories.map((c) => `${c.id}(${c.name})`).join(', ')}`);
-    const data = body(await this.mod(M.list).getAssetList({ cursor, count, categoryIds: JSON.stringify([catId]) }), 'GET_ASSET_LIST');
+    const data = body(await this.mod(M.list).getAssetList({ cursor: cursor || 0, count, categoryIds: JSON.stringify([catId]) }), 'GET_ASSET_LIST');
     const info = data.dataInfos || {};
     const raw = (info.template || []).map((t) => ({ ...t, panelKey: t.panelKey || panel_key }));
     return { panel_key, categories, category_id: catId, ...this.page(raw), next_cursor: info.cursor ?? null, has_more: !!info.hasNext };
   }
 
   // The search API returns only ~5 items per request when several panels are combined, and ignores
-  // paging parameters; asking each panel separately returns the full match list.
-  async search({ query }) {
+  // paging parameters; asking each panel separately returns the full match list (素材广场 caps it at 1000),
+  // which is then paged here.
+  async search({ query, panel_key, offset = 0, count = 50 }) {
     this.ensureCompatible();
     if (typeof query !== 'string' || !query.trim()) throw Error('INVALID_QUERY: query must be a non-empty string');
     const q = query.trim();
     const applicable = this.nav().panels.map((p) => p.panel_key);
     const searchable = new Set(this.mod(M.navConst).SearchNavItemKeys.flat());
+    const targets = applicable.filter((k) => searchable.has(k) && (panel_key === undefined || k === panel_key));
+    if (panel_key !== undefined && !targets.length) {
+      throw Error(`NOT_SEARCHABLE: ${panel_key}; searchable panels: ${applicable.filter((k) => searchable.has(k)).join(', ')}`);
+    }
     const server = await Promise.all(
-      applicable
-        .filter((k) => searchable.has(k))
+      targets
         .map(async (k) => {
           const data = body(await this.mod(M.search).searchAsset({ searchWord: q, panelList: k, getCategoryInfo: true, getAuthorInfo: true }), 'SEARCH');
           return ((data.dataInfos && data.dataInfos.template) || []).map((t) => ({ ...t, panelKey: t.panelKey || k }));
@@ -227,7 +260,17 @@ class Library {
       if (!it || !it.templateId || !allowed.has(it.panelKey)) continue;
       if (!seen.has(String(it.templateId))) seen.set(String(it.templateId), it);
     }
-    return { query: q, ...this.page([...seen.values()]) };
+    const { items, raw, unsupported } = this.page([...seen.values()]);
+    const end = offset + count;
+    return {
+      query: q,
+      total: items.length,
+      items: items.slice(offset, end),
+      raw: raw.slice(offset, end),
+      next_offset: end < items.length ? end : null,
+      has_more: end < items.length,
+      ...(unsupported ? { unsupported } : {}),
+    };
   }
 
   async download(item) {
@@ -252,9 +295,11 @@ class Library {
   }
 
   // `item` is a raw record from library_list / library_search.
-  async apply({ item, auto_instantiate = true }) {
+  async apply({ item, auto_instantiate = true, image_index }) {
     this.ensureCompatible();
     if (!item || !item.templateId) throw Error('INVALID_TEMPLATE: pass the raw record returned by library_list / library_search');
+    if (item.panelKey === SQUARE_PANEL) return this.squareApply({ item, auto_instantiate, image_index });
+    if (image_index !== undefined) throw Error('INVALID_IMAGE_INDEX: image_index only applies to AI image cards from 素材广场');
     const { EF, sceneEditor, project } = editingScene(this);
     if (this.applying) throw Error('APPLY_IN_PROGRESS');
     this.applying = true;
@@ -291,6 +336,7 @@ class Library {
         title: item.title,
         package_path: pkg,
         package_cached: cached,
+        kind: 'package',
         auto_instantiated: !!auto_instantiate,
         added_objects: added.map((o) => ({ name: o.name, object_path: sceneObjectPath(o) })),
         package_folders: packageFolders,
