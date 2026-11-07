@@ -247,45 +247,6 @@ class Library {
     return { panel_key, categories, category_id: catId, ...this.page(raw), next_cursor: info.cursor ?? null, has_more: !!info.hasNext };
   }
 
-  // The search API returns only ~5 items per request when several panels are combined, and ignores
-  // paging parameters; asking each panel separately returns the full match list (素材广场 caps it at 1000),
-  // which is then paged here.
-  async search({ query, panel_key, offset = 0, count = 50 }) {
-    this.ensureCompatible();
-    if (typeof query !== 'string' || !query.trim()) throw Error('INVALID_QUERY: query must be a non-empty string');
-    const q = query.trim();
-    const applicable = this.nav().panels.map((p) => p.panel_key);
-    const searchable = new Set(this.mod(M.navConst).SearchNavItemKeys.flat());
-    const targets = applicable.filter((k) => searchable.has(k) && (panel_key === undefined || k === panel_key));
-    if (panel_key !== undefined && !targets.length) {
-      throw Error(`NOT_SEARCHABLE: ${panel_key}; searchable panels: ${applicable.filter((k) => searchable.has(k)).join(', ')}`);
-    }
-    const server = await Promise.all(
-      targets
-        .map(async (k) => {
-          const data = body(await this.mod(M.search).searchAsset({ searchWord: q, panelList: k, getCategoryInfo: true, getAuthorInfo: true }), 'SEARCH');
-          return ((data.dataInfos && data.dataInfos.template) || []).map((t) => ({ ...t, panelKey: t.panelKey || k }));
-        }),
-    );
-    const allowed = new Set(applicable);
-    const seen = new Map();
-    for (const it of server.flat()) {
-      if (!it || !it.templateId || !allowed.has(it.panelKey)) continue;
-      if (!seen.has(String(it.templateId))) seen.set(String(it.templateId), it);
-    }
-    const { items, raw, unsupported } = this.page([...seen.values()]);
-    const end = offset + count;
-    return {
-      query: q,
-      total: items.length,
-      items: items.slice(offset, end),
-      raw: raw.slice(offset, end),
-      next_offset: end < items.length ? end : null,
-      has_more: end < items.length,
-      ...(unsupported ? { unsupported } : {}),
-    };
-  }
-
   async download(item) {
     const EF = this.mod(M.ef);
     const file = Object.values((item.businessExtra && item.businessExtra.fileMap) || {})[0];
@@ -365,7 +326,6 @@ const METHODS = {
   self_check: 'selfCheck',
   library_nav: 'nav',
   library_list: 'list',
-  library_search: 'search',
   library_apply: 'apply',
 };
 

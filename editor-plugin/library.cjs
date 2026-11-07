@@ -23,10 +23,11 @@ const delivery = require('./features/delivery.cjs');
 const community = require('./features/community.cjs');
 const music = require('./features/music.cjs');
 const preview = require('./features/preview.cjs');
+const search = require('./features/search.cjs');
 const dev = require('./features/dev.cjs');
 
 const { Library } = assets;
-const features = [menu, facewarp, project, cleanup, works, square, delivery, community, music, preview, dev];
+const features = [menu, facewarp, project, cleanup, works, square, delivery, community, music, preview, search, dev];
 for (const f of features) Object.assign(Library.prototype, f.methods);
 
 // RPC method name -> Library method; the runtime dispatches through this table.
