@@ -293,12 +293,14 @@ test('submitChecks removes the scratch folder when the export fails', async () =
   assert.deepEqual(leftovers(instance), []);
 });
 
-test('effect_check opens the 特效检测 window, listening first, maps the status code and closes the window', async () => {
+test('effect_check opens the 特效检测 window, listening first, and maps the status code; a page it cannot read stays open', async () => {
   const done = setup({ perfStatus: 3 });
-  assert.deepEqual(await done.lib.effectCheck({ timeout_ms: 1000 }), { finished: true, status_code: 3, result: 'needs_optimization', closed_previous: 0, window_closed: true });
+  const out = await done.lib.effectCheck({ timeout_ms: 1000 });
+  assert.deepEqual([out.finished, out.status_code, out.result, out.closed_previous, out.window_closed], [true, 3, 'needs_optimization', 0, false]);
+  assert.match(out.details_error, /left open to read there/);
   assert.equal(done.calls.showPerf, 1);
   assert.deepEqual(done.calls.exportDirs, [], 'no local export');
-  assert.equal(globalThis.App._windows.filter((w) => !w.isClosed).length, 1, 'only the main window is left');
+  assert.equal(globalThis.App._windows.filter((w) => w.constructor.name === 'DYEHPerfTestWebWindow' && !w.isClosed).length, 1);
 });
 
 test('effect_check leaves a window still checking at its timeout, and the next call closes it first', async () => {

@@ -5,7 +5,7 @@
 const fs = require('fs');
 const path = require('path');
 const { M, scratchDir, exportEffectPackage, nextEvent } = require('./common.cjs');
-const { submitPageBridge } = require('./submitpage.cjs');
+const { submitPageBridge, perfPageBridge } = require('./webpages.cjs');
 
 // IconPreviewManager.iconTypeToProjectIconPathMap keys (IconType: Female 0, Male 1, Common 2).
 const ICON_TYPES = { female: 0, male: 1, common: 2 };
@@ -259,8 +259,9 @@ const methods = {
   },
 
   // The toolbar's 特效检测 button (PerfTestButton) only opens this window; its page uploads the package
-  // and runs the cloud check, then reports a status code back through getPerfTestStatus. The window is
-  // closed once the code arrives; one left by an earlier call (still running at its timeout) is closed first.
+  // and runs the cloud check, then reports a status code back through getPerfTestStatus. Once the code
+  // arrives the page's details are read and the window is closed; when they cannot be read the window is
+  // left open for the user. One left by an earlier call (e.g. still running at its timeout) is closed first.
   async effectCheck({ timeout_ms = 300000 } = {}) {
     this.ensureCompatible('check');
     activeProject(this);
@@ -273,8 +274,15 @@ const methods = {
     const hit = await result;
     if (!hit) return { finished: false, result: 'timeout', closed_previous, note: 'the 特效检测 window is left open with the check running; the next effect_check closes it' };
     const code = hit.args[0];
+    const out = { finished: true, status_code: code, result: PERF_STATUS[code] || 'unknown', closed_previous };
+    let details;
+    try {
+      details = await perfPageBridge(win)({ wait_ms: PAGE_TIMING.stepMs });
+    } catch (e) {
+      return { ...out, window_closed: false, details_error: `${e.message}; the 特效检测 window is left open to read there` };
+    }
     await closeWindows([win]);
-    return { finished: true, status_code: code, result: PERF_STATUS[code] || 'unknown', closed_previous, window_closed: true };
+    return { ...out, ...details, window_closed: true };
   },
 
   // Same entry as the toolbar's 提交特效 button: the editor runs its own pre-checks and opens the submit

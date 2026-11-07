@@ -460,7 +460,7 @@ export function createServer(deps = {}) {
     {
       name: 'effect_check',
       description:
-        '特效检测，和在编辑器工具栏点「特效检测」一样：打开「特效检测」窗口，由窗口把特效包上传到抖音做云端检测（不是发布），等待结果 passed / not_passed / needs_optimization / failed，出结果后关掉这个窗口（window_closed=true）。超过 timeout_ms 还没出结果时返回 timeout，窗口留着继续检测；之前调用留下的检测窗口会先关掉再开新的（closed_previous 是关掉的个数），所以窗口不会越叠越多。',
+        '特效检测，和在编辑器工具栏点「特效检测」一样：打开「特效检测」窗口，由窗口把特效包上传到抖音做云端检测（不是发布），等待结果 passed / not_passed / needs_optimization / failed。出结果后读出检测页的详情一起返回：verdict（页面结论，如「检测通过」「特效不通过」）、checks（每项检测的结论；包体积、帧率给出 figures：数值、上限、是否达标，帧率分 android / ios；没通过的项带页面给的改进建议 advice，读不到时写 advice_unavailable），然后关掉这个窗口（window_closed=true）；详情读不出来时窗口留着，返回 details_error。超过 timeout_ms 还没出结果时返回 timeout，窗口留着继续检测；之前调用留下的检测窗口会先关掉再开新的（closed_previous 是关掉的个数），所以窗口不会越叠越多。',
       shape: {
         ...target,
         timeout_ms: z.number().int().min(10000).max(1800000).optional().describe('最长等待时间，默认 300000（5 分钟）。'),

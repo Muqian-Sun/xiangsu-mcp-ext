@@ -6,7 +6,7 @@ import { JSDOM } from 'jsdom';
 const require = createRequire(import.meta.url);
 const { Library, M } = require('../editor-plugin/library.cjs');
 const { PAGE_TIMING } = require('../editor-plugin/features/delivery.cjs');
-const { BRIDGE_SCOPE, SOURCE_URL } = require('../editor-plugin/features/submitpage.cjs');
+const { BRIDGE_SCOPE, SOURCE_URL } = require('../editor-plugin/features/webpages.cjs');
 
 Object.assign(PAGE_TIMING, { readyMs: 3000, quietMs: 100, pollMs: 20, settleMs: 30, stepMs: 500, checksMs: 1500, closeMs: 300 });
 
@@ -329,7 +329,7 @@ test('submit_prepare says what is left when the checks fail or the agreement is 
 
 test('submit_prepare fails loudly when the page or the window is not what it expects', async () => {
   await assert.rejects(editor(fakePage({ nextLabel: '继续' })).lib.submitPrepare(fill), /SUBMIT_PAGE_CHANGED: the 下一步 button not found/);
-  await assert.rejects(editor(fakePage({ answer: false })).lib.submitPrepare(fill), /SUBMIT_PAGE_NOT_READY: .*last error SUBMIT_PAGE_NO_ANSWER: state/);
+  await assert.rejects(editor(fakePage({ answer: false })).lib.submitPrepare(fill), /SUBMIT_PAGE_NOT_READY: .*last error PAGE_NO_ANSWER: submitPage state/);
   await assert.rejects(editor(fakePage(), { windowName: 'SomeOtherWindow' }).lib.submitPrepare(fill), /SUBMIT_WINDOW_NOT_FOUND/);
 });
 
