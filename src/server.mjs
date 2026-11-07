@@ -17,6 +17,7 @@ import { Projects, openWithApp } from './projects.mjs';
 import { prepareIcon } from './icons.mjs';
 import { formatObjects, formatTree, pickInspect, resolveRefs } from './inspect.mjs';
 import { loadScene } from './scenefile.mjs';
+import { makeupLayers } from './makeup.mjs';
 import { cropImage, framesDir } from './frames.mjs';
 import { DOWNLOAD_TTL_MS, Downloads, checkTarget, copyProject, editorRoot, outlineProject } from './works.mjs';
 
@@ -764,6 +765,20 @@ export function createServer(deps = {}) {
         const res = text(out);
         if (warn) res.content.push({ type: 'text', text: warn });
         if (save_to) res.content.push({ type: 'text', text: `已保存：${saveFile(save_to, 'inspect_many.json', res.content[0].text)}` });
+        return res;
+      },
+    },
+    {
+      name: 'makeup_layers',
+      description:
+        '列出一个工程的全部美妆层（FaceMask 妆容层和 EyeColorV2 美瞳），逐层说明画在哪个部位、什么颜色、男女强度，以及是否生效（对象或上级隐藏、组件停用、男女强度都为 0 的不生效）。区域（全脸 / 眼部 / 睫毛 / 唇部 / 牙齿）取自妆容层自身的类型；部位先看层名（眉、眼线、腮红、口红等关键字），层名看不出时按贴图像素判断（part_from 注明依据），颜色是贴图上色部分按透明度加权的平均色（color 和 hsl）。groups 按眉、眼妆、美瞳、颊、轮廓、唇、点缀汇总生效的层，absent 列出整套妆里没有的部位，用来看一套妆缺了什么、或拆解别人的作品（works_download 下载的工程）用了哪些部位和颜色。读的是工程目录里的场景文件：正在编辑的工程先 save_project。',
+      shape: {
+        project_dir: z.string().min(1).describe('工程目录的绝对路径（含 Assets/main.scene），如 works_download 返回的 project_path 或自己的工程。'),
+        save_to: saveTo,
+      },
+      run: async ({ project_dir, save_to }) => {
+        const res = text(makeupLayers(project_dir));
+        if (save_to) res.content.push({ type: 'text', text: `已保存：${saveFile(save_to, 'makeup_layers.json', res.content[0].text)}` });
         return res;
       },
     },
