@@ -1,7 +1,7 @@
 'use strict';
-// The submit window shows a web page (effect.douyin.com/ac/submit-orion). Scripts are run in it through the
-// window's webview and answer through the window's JS bridge, which hands page queries
-// (orionJSB://<scope>/<method>?<params>) to the handlers registered for that scope.
+// The submit and 特效检测 windows show web pages (effect.douyin.com/ac/submit-orion, /ac/perftest-orion-v2).
+// Scripts are run in them through the window's webview and answer through the window's JS bridge, which
+// hands page queries (orionJSB://<scope>/<method>?<params>) to the handlers registered for that scope.
 
 const BRIDGE_SCOPE = 'XiangsuMcpExt';
 const SOURCE_URL = 'orion://inject/xiangsu-mcp-ext';
@@ -182,8 +182,51 @@ async function submitPage(arg) {
   }
 }
 
-// Returns run(arg, ms): runs submitPage(arg) in the window's page and resolves with what it returns.
-function submitPageBridge(win) {
+// Runs in the 特效检测 page once its result is in. Reads the verdict and each check with its figures
+// (package size, Android then iOS frame rate, each against its limit). A check that did not pass has a help
+// icon whose advice only renders while it is hovered, so it is hovered and read.
+async function perfPage(arg) {
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  const text = (el) => (el ? el.textContent.trim() : '');
+  const title = document.querySelector('.perf-top .status-title');
+  const items = [...document.querySelectorAll('.effect-test-container .effect-test-item')];
+  if (!title || !items.length) throw Error('PERF_PAGE_CHANGED: the 特效检测 page shows no verdict or checks');
+  const hover = (el, on) => {
+    el.dispatchEvent(new MouseEvent(on ? 'mouseenter' : 'mouseleave', { bubbles: false, view: window }));
+    el.dispatchEvent(new MouseEvent(on ? 'mouseover' : 'mouseout', { bubbles: true, view: window }));
+  };
+  const checks = [];
+  for (const item of items) {
+    const check = { name: text(item.querySelector('.effect-test-item-top-text')) };
+    const rows = [...item.querySelectorAll('.effect-test-item-bottom-item')];
+    if (rows.length) {
+      check.figures = rows.map((row) => {
+        const [value, limit] = row.querySelectorAll('span');
+        return { value: text(value), limit: text(limit).replace(/^\//, ''), passed: !!value && value.classList.contains('effect-test-item-bottom-text-pass') };
+      });
+      if (rows.length === 2) check.figures.forEach((f, i) => (f.platform = ['android', 'ios'][i]));
+    }
+    const help = item.querySelector('.effect-test-item-top-help');
+    if (help) {
+      const before = new Set(document.querySelectorAll('.effect-test-item-top-help-content-text'));
+      hover(help, true);
+      let tip = null;
+      for (let waited = 0; !tip && waited < arg.wait_ms; waited += 100) {
+        await sleep(100);
+        tip = [...document.querySelectorAll('.effect-test-item-top-help-content-text')].find((t) => !before.has(t)) || null;
+      }
+      hover(help, false);
+      if (tip) check.advice = text(tip);
+      else check.advice_unavailable = `its help popup did not open in ${arg.wait_ms} ms`;
+    }
+    checks.push(check);
+  }
+  const desc = document.querySelector('.perf-top .status-desc');
+  return { verdict: text(title), ...(desc ? { verdict_detail: text(desc) } : {}), checks };
+}
+
+// Returns run(arg, ms): runs pageFn(arg) in the window's page and resolves with what it returns.
+function pageBridge(win, pageFn) {
   const pending = new Map();
   let seq = 0;
   win.JSB.joinRegisterHandler(BRIDGE_SCOPE, {
@@ -201,7 +244,7 @@ function submitPageBridge(win) {
       const id = String(++seq);
       const timer = setTimeout(() => {
         pending.delete(id);
-        reject(Error(`SUBMIT_PAGE_NO_ANSWER: ${arg.action} got no answer from the submit page in ${ms} ms`));
+        reject(Error(`PAGE_NO_ANSWER: ${pageFn.name}${arg.action ? ` ${arg.action}` : ''} got no answer from the page in ${ms} ms`));
       }, ms);
       pending.set(id, (p) => {
         clearTimeout(timer);
@@ -209,8 +252,11 @@ function submitPageBridge(win) {
         else reject(Error(p.error));
       });
       // The second argument is the script's source URL: a callback there crashes the editor process.
-      win.webview.evaluateJavascript(`(${pageCall})(${JSON.stringify(id)}, ${JSON.stringify(BRIDGE_SCOPE)}, ${submitPage}, ${JSON.stringify(arg)});`, SOURCE_URL);
+      win.webview.evaluateJavascript(`(${pageCall})(${JSON.stringify(id)}, ${JSON.stringify(BRIDGE_SCOPE)}, ${pageFn}, ${JSON.stringify(arg)});`, SOURCE_URL);
     });
 }
 
-module.exports = { submitPageBridge, submitPage, BRIDGE_SCOPE, SOURCE_URL };
+const submitPageBridge = (win) => pageBridge(win, submitPage);
+const perfPageBridge = (win) => pageBridge(win, perfPage);
+
+module.exports = { submitPageBridge, perfPageBridge, submitPage, perfPage, BRIDGE_SCOPE, SOURCE_URL };
