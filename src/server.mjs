@@ -278,10 +278,12 @@ export function createServer(deps = {}) {
     },
     {
       name: 'library_search',
-      description: '按关键词搜索官方素材库，逐个面板查询以拿全结果（美妆、滤镜、脸部变形、AI 实时变脸、贴纸、画面特效、音效、素材广场等），按 offset / count 分页返回 template_id、title、panel_key、kind、cover_url 和总数 total。素材广场单词最多返回 1000 条，可用 panel_key 只搜某个面板。kind：package 素材包、ai_image AI 图片、ai_makeup AI 妆容、custom_gan 自定义实时变脸、foreground_sticker 前景贴纸、face_sticker 跟脸贴纸、filter 滤镜。',
+      description:
+        '按关键词搜索官方素材库（美妆、滤镜、脸部变形、AI 实时变脸、贴纸、画面特效、音效、素材广场等）。除了标题匹配，词正好是面板名或子分类名时也带出那里的素材：「滤镜」→ 滤镜面板，「腮红」→ 美妆/腮红、跟脸贴纸/腮红（这些素材标题里多半没有这个词），「复古滤镜」→ 滤镜/复古；每个面板或子分类最多 300 条。结果按标题完全相同 > 标题开头 > 标题包含 > 分类匹配 > 其余排序，每条的 matched 说明命中方式（title、category:面板/分类、panel:面板）。queries 一次搜多个近义词（最多 8 个）并合并去重。按 offset / count 分页（结果缓存 10 分钟，翻页不重新请求），每条带 template_id、title、panel_key、kind、cover_url，另返回 total、by_panel（各面板条数，可再用 panel_key 缩小）、matched_categories（展开了哪些分类）、related_categories（名字里含这个词、没有展开的分类，可用 library_list 列出）。kind：package 素材包、ai_image AI 图片、ai_makeup AI 妆容、custom_gan 自定义实时变脸、foreground_sticker 前景贴纸、face_sticker 跟脸贴纸、filter 滤镜。',
       shape: {
         ...target,
-        query: z.string().min(1).describe('搜索关键词，如「芒果脸」「小屁桃」「腮红」。'),
+        query: z.string().min(1).optional().describe('搜索关键词，如「芒果脸」「腮红」「复古滤镜」。与 queries 二选一。'),
+        queries: z.array(z.string().min(1)).min(1).max(8).optional().describe('一次搜多个词并合并，如 ["冷艳", "猫眼", "烟熏", "风格妆"]。与 query 二选一。'),
         panel_key: z.string().optional().describe('只搜这个面板（library_nav 返回的 panel_key，如 aigc_material）。'),
         offset: z.number().int().min(0).optional().describe('分页起点，取上一页的 next_offset；默认 0。'),
         count: z.number().int().min(1).max(200).optional().describe('每页数量，默认 50。'),

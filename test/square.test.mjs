@@ -126,6 +126,7 @@ function setup({ busy = false, addsNothing = false } = {}) {
     [M.aiCategory]: {
       getAIAssetCategory: async (p) => (calls.category++, calls.categoryParams = p, { statusCode: 0, data: { categories: [{ id: 45004, name: '图片' }, { id: 45003, name: '妆容' }] } }),
     },
+    [M.category]: { getAssetCategory: async () => ({ body: { statusCode: 0, data: { categories: [{ id: 46001, name: '耳朵' }] } } }) },
     [M.aiList]: {
       getAIAssetList: async (p) => {
         calls.list.push(p);
@@ -235,7 +236,7 @@ test('search includes 素材广场, can stay on one panel and pages the merged r
   const { lib, calls } = setup();
   const all = await lib.search({ query: '猫' });
   assert.deepEqual(calls.search.map((p) => p.panelList).sort(), ['aigc_material', 'sticker']);
-  assert.deepEqual(all.items.map((i) => [i.template_id, i.kind]), [['901', 'ai_image'], ['904', 'package'], ['902', 'ai_makeup'], ['11', 'package']]);
+  assert.deepEqual(all.items.map((i) => [i.template_id, i.kind]), [['11', 'package'], ['901', 'ai_image'], ['904', 'package'], ['902', 'ai_makeup']]);
   assert.deepEqual({ total: all.total, unsupported: all.unsupported, next: all.next_offset }, { total: 4, unsupported: 1, next: null });
   const page = await lib.search({ query: '猫', panel_key: 'aigc_material', offset: 1, count: 1 });
   assert.deepEqual(calls.search.at(-1).panelList, 'aigc_material');
