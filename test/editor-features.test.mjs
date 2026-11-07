@@ -69,17 +69,32 @@ function setup({ active = true, packageAdds = 1, changed = false } = {}) {
   class ResItemFolder {}
   class ResItemAlgorithmAsset {}
   class ResItemPrefab {}
-  const res = (Ctor, guid, rel) => Object.assign(new Ctor(), { guid, assetPath: path.join(projectDir, rel) });
+  // Resources are on disk like an import leaves them, unless editorOnly: the folders the editor gives an
+  // instantiated package's objects (<name>_滤镜 …) exist only in the editor until a save writes them.
+  const res = (Ctor, guid, rel, { editorOnly = false } = {}) => {
+    const assetPath = path.join(projectDir, rel);
+    if (editorOnly) {
+      // nothing on disk
+    } else if (Ctor === ResItemFolder) {
+      fs.mkdirSync(assetPath, { recursive: true });
+    } else {
+      fs.mkdirSync(path.dirname(assetPath), { recursive: true });
+      fs.writeFileSync(assetPath, guid);
+    }
+    return Object.assign(new Ctor(), { guid, assetPath });
+  };
   const resources = [
     res(ResItemFolder, 'f-xpt', 'Assets/小屁桃_美型'),
     res(ResItemAlgorithmAsset, 'g-xpt-algo', 'Assets/小屁桃_美型/韩系甜妹.algo'),
+    res(ResItemFolder, 'f-xpt-filter', 'Assets/小屁桃_滤镜', { editorOnly: true }),
+    res(ResItemAlgorithmAsset, 'g-xpt-filter', 'Assets/小屁桃_滤镜/小屁桃_滤镜/纹理/filter.png', { editorOnly: true }),
     res(ResItemPrefab, 'g-xpt-prefab', 'Assets/小屁桃_美型/预制件/小屁桃_美型.prefab'),
     res(ResItemFolder, 'f-dyn', 'Assets/_DynamicAsset/1'),
     res(ResItemAlgorithmAsset, 'g-shared', 'Assets/_DynamicAsset/1/共享.algo'),
     res(ResItemAlgorithmAsset, 'g-jl', 'Assets/尖脸大眼/尖脸.algo'),
   ];
   const refs = new Map([
-    [xpt, ['g-xpt-algo', 'g-shared']],
+    [xpt, ['g-xpt-algo', 'g-xpt-filter', 'g-shared']],
     [jianlian, ['g-jl', 'g-shared']],
   ]);
   const sceneEditor = {
@@ -103,6 +118,7 @@ function setup({ active = true, packageAdds = 1, changed = false } = {}) {
     getResourceItemByAssetPath: (p) => resources.find((r) => r.assetPath === p) || null,
     deleteResourceItemByPath: (p) => {
       calls.deleted.push(path.relative(projectDir, p));
+      fs.rmSync(p, { recursive: true, force: true });
       for (let i = resources.length - 1; i >= 0; i--) if (resources[i].assetPath === p || resources[i].assetPath.startsWith(p + path.sep)) resources.splice(i, 1);
     },
   };
@@ -181,7 +197,7 @@ function setup({ active = true, packageAdds = 1, changed = false } = {}) {
     if (!(name in modules)) throw Error(`MODULE_NOT_FOUND: ${name}`);
     return modules[name];
   };
-  return { lib: new Library(mod), calls, warps, dyn, modules, projectDir, hoverDir, resources, sceneObjects, processes };
+  return { lib: new Library(mod), calls, warps, dyn, modules, projectDir, hoverDir, resources, sceneObjects, processes, res };
 }
 
 test('menu_list flattens the editor menu with translated names and hides cloud AI entries', () => {
@@ -342,8 +358,9 @@ test('object_remove deletes the object with undo and reports only resources it a
   const out = await lib.objectRemove({ object_path: '小屁桃_美型' });
   assert.deepEqual(calls.removed, [[['小屁桃_美型'], true]]);
   assert.equal(out.removed_object, '面部拉伸/小屁桃_美型');
-  assert.deepEqual(out.orphaned_resources, ['Assets/小屁桃_美型/韩系甜妹.algo']);
+  assert.deepEqual(out.orphaned_resources, ['Assets/小屁桃_美型/韩系甜妹.algo', 'Assets/小屁桃_滤镜/小屁桃_滤镜/纹理/filter.png']);
   assert.deepEqual(out.unused_paths, ['Assets/小屁桃_美型']);
+  assert.deepEqual(out.editor_only_paths, ['Assets/小屁桃_滤镜']);
   assert.deepEqual(out.resources_deleted, []);
   assert.deepEqual(calls.deleted, []);
 });
@@ -354,12 +371,13 @@ test('object_remove can delete the orphaned package folder right away', async ()
   assert.deepEqual(out.resources_deleted, ['Assets/小屁桃_美型']);
   assert.deepEqual(calls.deleted, ['Assets/小屁桃_美型']);
   assert.ok(resources.every((r) => !r.assetPath.includes('小屁桃_美型')));
+  assert.ok(resources.some((r) => r.guid === 'f-xpt-filter'), 'the editor-only folder is left for the next save to drop');
   assert.ok(resources.some((r) => r.guid === 'g-shared'));
 });
 
 test('object_remove keeps a package folder that still holds a resource another object uses', async () => {
-  const { lib, calls, resources, projectDir, sceneObjects } = setup();
-  const shared = Object.assign(new resources[1].constructor(), { guid: 'g-xpt-shared-tex', assetPath: path.join(projectDir, 'Assets/小屁桃_美型/共用.png') });
+  const { lib, calls, resources, sceneObjects, res } = setup();
+  const shared = res(resources[1].constructor, 'g-xpt-shared-tex', 'Assets/小屁桃_美型/共用.png');
   resources.push(shared);
   const keeper = { name: '保留者', parent: sceneObjects[0] };
   sceneObjects.push(keeper);

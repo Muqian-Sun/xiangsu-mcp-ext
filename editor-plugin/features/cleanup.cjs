@@ -6,6 +6,10 @@
 //   which the scene never references).
 // A folder is only deleted when nothing inside it is still referenced. Resources reached only indirectly
 // (e.g. a texture inside a material file) are never treated as orphans.
+// Instantiating a package also gives the editor folders named after its objects (<name>_滤镜, _美型,
+// _美妆, …) that only reach the disk when a save runs while the object is still in the scene; once the
+// object is removed, the next save drops them. Those are reported apart and never deleted.
+const fs = require('fs');
 const path = require('path');
 const { editingScene, sceneObjectPath, resolveByPath, projectResources, packageRoot, readImports, writeImports } = require('./common.cjs');
 
@@ -86,11 +90,13 @@ const methods = {
     }
     // Deleting a package folder deletes everything in it, so loose orphans are the ones outside those folders.
     const covered = (p) => [...folders].some((f) => within(p, f));
-    const unused = [...[...folders].map((f) => rel(project, f)), ...orphans.filter((r) => !covered(r.assetPath)).map((r) => rel(project, r.assetPath))];
+    const leftovers = [...folders, ...orphans.filter((r) => !covered(r.assetPath)).map((r) => r.assetPath)];
+    const unused = leftovers.filter((p) => fs.existsSync(p)).map((p) => rel(project, p));
     const report = {
       removed_object: target.path,
       orphaned_resources: orphans.map((r) => rel(project, r.assetPath)),
       unused_paths: unused,
+      editor_only_paths: leftovers.filter((p) => !fs.existsSync(p)).map((p) => rel(project, p)),
       resources_deleted: [],
     };
     if (recordKeys.length) {
