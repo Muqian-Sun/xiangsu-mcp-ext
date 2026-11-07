@@ -97,22 +97,28 @@ function snapshot(value, depth = 2, seen = new WeakSet()) {
 const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
 const LIBRARY_PATH = require.resolve('./library.cjs');
 const FEATURE_DIR = path.join(__dirname, 'features');
+const { devEvalEnabled } = require('./features/dev.cjs');
+
+// The devEval flag is read on every call, like dev_eval, so turning it off takes effect in open windows.
+function devOnly(fn) {
+  return (params) => {
+    if (!devEvalEnabled()) throw Error('EVAL_DISABLED');
+    return fn(params);
+  };
+}
 
 class Runtime {
-  constructor(config) {
-    this.config = config || {};
+  constructor() {
     this.token = crypto.randomBytes(24).toString('hex');
     this.server = null;
     this.stateFile = path.join(INSTANCE_DIR, `${process.pid}.json`);
     this.libraryMtime = 0;
     this.refreshLibrary();
-    this.methods = { status: () => this.status() };
-    if (this.config.devEval) {
-      Object.assign(this.methods, {
-        describe: ({ module, depth = 1 }) => snapshot(requireModule(module), depth),
-        eval: ({ code, depth = 2 }) => this.evaluate(code, depth),
-      });
-    }
+    this.methods = {
+      status: () => this.status(),
+      describe: devOnly(({ module, depth = 1 }) => snapshot(requireModule(module), depth)),
+      eval: devOnly(({ code, depth = 2 }) => this.evaluate(code, depth)),
+    };
   }
 
   // Reloads library.cjs (and through it the feature modules) when any of them changed on disk;
@@ -150,7 +156,7 @@ class Runtime {
       pid: process.pid,
       projectPath: p?.path || null,
       hasOrion: !!orion(),
-      devEval: !!this.config.devEval,
+      devEval: devEvalEnabled(),
       methods: [...Object.keys(this.methods), ...Object.keys(this.libraryMethods)],
     };
   }

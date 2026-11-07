@@ -30,11 +30,10 @@ const dest = path.join(pluginRoot, `${NAME}@${VERSION}`);
 fs.mkdirSync(dest, { recursive: true });
 const entry = `'use strict';
 const { Runtime, log } = require(${JSON.stringify(path.join(repo, 'editor-plugin/runtime.cjs'))});
-const config = require(${JSON.stringify(configPath)});
 module.exports = class {
   initPlugin() {
     if (!process.argv.includes('--projectType=project')) return;
-    try { this.runtime = new Runtime(config); this.runtime.start(); } catch (e) { log('init failed', e && e.stack); }
+    try { this.runtime = new Runtime(); this.runtime.start(); } catch (e) { log('init failed', e && e.stack); }
   }
   deinitPlugin() { this.runtime && this.runtime.stop(); }
 };

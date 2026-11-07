@@ -7,18 +7,32 @@ import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
 const { Runtime } = require('../editor-plugin/runtime.cjs');
+const { CONFIG_PATH } = require('../editor-plugin/features/dev.cjs');
 const LIBRARY = require.resolve('../editor-plugin/library.cjs');
 
-test('library methods dispatch through the METHODS table and dev methods stay off', () => {
-  const rt = new Runtime({ devEval: false });
+test('library methods dispatch through the METHODS table', () => {
+  const rt = new Runtime();
   assert.equal(typeof rt.resolve('library_apply'), 'function');
   assert.equal(rt.resolve('library_covers'), null);
   assert.equal(typeof rt.resolve('self_check'), 'function');
   for (const m of ['menu_preview', 'object_remove', 'resource_delete_unused', 'project_launch', 'project_close', 'project_state', 'works_by_effect']) assert.equal(typeof rt.resolve(m), 'function', m);
-  assert.equal(rt.resolve('eval'), null);
   assert.equal(rt.resolve('constructor'), null);
   assert.equal(rt.resolve('nope'), null);
-  assert.equal(typeof new Runtime({ devEval: true }).resolve('eval'), 'function');
+});
+
+test('eval and describe follow the devEval flag on every call, in a runtime that is already running', async (t) => {
+  const original = fs.existsSync(CONFIG_PATH) ? fs.readFileSync(CONFIG_PATH) : null;
+  t.after(() => (original === null ? fs.rmSync(CONFIG_PATH, { force: true }) : fs.writeFileSync(CONFIG_PATH, original)));
+  fs.writeFileSync(CONFIG_PATH, JSON.stringify({ devEval: true }));
+  const rt = new Runtime();
+  assert.equal(await rt.resolve('eval')({ code: 'return 1 + 1' }), 2);
+  assert.equal(rt.status().devEval, true);
+  fs.writeFileSync(CONFIG_PATH, JSON.stringify({ devEval: false }));
+  await assert.rejects(async () => rt.resolve('eval')({ code: 'return 1' }), /EVAL_DISABLED/);
+  assert.throws(() => rt.resolve('describe')({ module: 'x' }), /EVAL_DISABLED/);
+  assert.equal(rt.status().devEval, false);
+  fs.rmSync(CONFIG_PATH);
+  await assert.rejects(async () => rt.resolve('eval')({ code: 'return 1' }), /EVAL_DISABLED/);
 });
 
 test('the library is reloaded when library.cjs or any feature module changes on disk, and only then', (t) => {
