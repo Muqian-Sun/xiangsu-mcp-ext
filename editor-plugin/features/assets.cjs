@@ -100,6 +100,11 @@ const REQUIRED = {
     [M.musicList, 'MusicListModel.prototype.getNextSearchMusicListForDouyin'],
     [M.musicSquare, 'MusicSquareManager.instance.setDouyinMusicInfo'],
   ],
+  preview: [
+    [M.preview, 'PreviewManager.getInstance'],
+    [M.preview, 'PreviewManager.prototype.cacheCurrentFrame'],
+    [M.preview, 'PreviewManager.prototype.captureScreenshotToMemory'],
+  ],
 };
 
 // Only plain asset lists can be applied; AI generation panels (妆容/图片/视频/实时变脸 UGC) cost quota

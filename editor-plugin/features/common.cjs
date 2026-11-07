@@ -42,6 +42,7 @@ const M = {
   musicCategory: '@orion/Business/EditWindow/Inspector/MusicLibrary/Model/MusicCategoryModel',
   musicList: '@orion/Business/EditWindow/Inspector/MusicLibrary/Model/MusicListModel',
   musicSquare: '@orion/Business/EditWindow/Inspector/MusicLibrary/Component/MusicListComponent/MusicSquareManager',
+  preview: '@orion/Business/Preview/PreviewManager',
 };
 
 // Scratch folder under the editor instance for exports this plugin makes and removes itself.
