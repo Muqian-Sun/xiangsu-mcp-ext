@@ -20,7 +20,7 @@ import { loadScene } from './scenefile.mjs';
 import { cropImage, framesDir } from './frames.mjs';
 import { DOWNLOAD_TTL_MS, Downloads, checkTarget, copyProject, editorRoot, outlineProject } from './works.mjs';
 
-const VERSION = '0.4.0';
+const VERSION = '0.5.0';
 
 const target = {
   project_path: z.string().optional().describe('目标工程的绝对路径。与 instance_id 二选一；只开了一个工程窗口时都可省略。'),
@@ -220,36 +220,56 @@ export function createServer(deps = {}) {
     {
       name: 'library_nav',
       description:
-        '列出像塑官方素材库里可直接应用的分类面板（panel_key），例如 3d_distortion=脸部变形/3D 变形、distortion=美型、gaoguai_gan/makeup_gan=AI 实时变脸、3d_makeup=美妆、3d_filter=滤镜、sticker=跟脸贴纸。需要扣额度的 AI 生成类面板不在其中。',
+        '列出像塑官方素材库里可直接应用的分类面板（panel_key）和类型 kind：general 为普通面板（如 3d_distortion=脸部变形/3D 变形、distortion=美型、gaoguai_gan/makeup_gan=AI 实时变脸、3d_makeup=美妆、3d_filter=滤镜、sticker=跟脸贴纸）；square 为 aigc_material=素材广场（其他创作者分享的素材，含现成的 AI 图片、AI 妆容、自定义实时变脸，应用时不重新生成、不扣额度）；collection 为 collection=收藏（当前账号收藏的素材）。需要扣额度现生成的 AI 面板不在其中。',
       shape: { ...target },
       run: plugin('library_nav'),
     },
     {
       name: 'library_list',
-      description: '分页列出某个官方素材面板里的素材：子分类、素材（template_id、title、cover_url 等）和翻页游标。拿到 template_id 后用 library_preview 看图、library_apply 应用。',
+      description: '分页列出某个官方素材面板里的素材：子分类、素材（template_id、title、kind、cover_url 等）和翻页游标。素材广场的子分类是妆容、图片、实时变脸、跟脸贴纸、前景贴纸、画面特效、3D 模型、3D 饰品；收藏的子分类是全部、美妆、滤镜等目录。没有可应用内容的广场卡片不列出，只在 unsupported 里计数。拿到 template_id 后用 library_preview 看图、library_apply 应用。',
       shape: {
         ...target,
         panel_key: z.string().describe('library_nav 返回的 panel_key。'),
-        category_id: z.string().optional().describe('子分类 ID；省略时用第一个子分类（通常是「全部」）。'),
-        cursor: z.number().int().min(0).optional().describe('翻页游标，取上一页的 next_cursor。'),
+        category_id: z.string().optional().describe('子分类 ID（收藏为目录名）；省略时用第一个子分类（通常是「全部」）。'),
+        cursor: z.union([z.number().int().min(0), z.string()]).optional().describe('翻页游标，原样取上一页的 next_cursor（收藏是字符串）。'),
         count: z.number().int().min(1).max(100).optional().describe('每页数量，默认 30。'),
       },
       run: library('library_list'),
     },
     {
       name: 'library_search',
-      description: '按关键词搜索官方素材库，逐个面板查询以拿全结果（美妆、滤镜、脸部变形、AI 实时变脸、贴纸、画面特效、音效等），返回 template_id、title、panel_key。',
-      shape: { ...target, query: z.string().min(1).describe('搜索关键词，如「芒果脸」「小屁桃」「腮红」。') },
+      description: '按关键词搜索官方素材库，逐个面板查询以拿全结果（美妆、滤镜、脸部变形、AI 实时变脸、贴纸、画面特效、音效、素材广场等），按 offset / count 分页返回 template_id、title、panel_key、kind 和总数 total。素材广场单词最多返回 1000 条，可用 panel_key 只搜某个面板。kind：package 素材包、ai_image AI 图片、ai_makeup AI 妆容、custom_gan 自定义实时变脸、foreground_sticker 前景贴纸、face_sticker 跟脸贴纸、filter 滤镜。',
+      shape: {
+        ...target,
+        query: z.string().min(1).describe('搜索关键词，如「芒果脸」「小屁桃」「腮红」。'),
+        panel_key: z.string().optional().describe('只搜这个面板（library_nav 返回的 panel_key，如 aigc_material）。'),
+        offset: z.number().int().min(0).optional().describe('分页起点，取上一页的 next_offset；默认 0。'),
+        count: z.number().int().min(1).max(200).optional().describe('每页数量，默认 50。'),
+      },
       run: library('library_search'),
     },
     {
       name: 'library_preview',
-      description: '查看官方素材的封面图，用于按画面挑选。一次最多 8 个，template_id 须来自本会话的 library_list / library_search。单个封面失败只在该项写明原因。',
-      shape: { template_ids: z.array(z.string()).min(1).max(8).describe('要看封面的 template_id。') },
-      run: async ({ template_ids }) => {
-        const rows = template_ids.map((id) => seenLib.get(id).slim);
+      description:
+        '查看官方素材的封面图，用于按画面挑选。一次最多 8 个，template_id 须来自本会话的 library_list / library_search。单个封面失败只在该项写明原因。all_images=true 时改为查看一张 AI 图片卡片（kind=ai_image）的整组结果图，按 image_index 编号，应用时用 library_apply 的 image_index 选择。',
+      shape: {
+        ...target,
+        template_ids: z.array(z.string()).min(1).max(8).describe('要看封面的 template_id。'),
+        all_images: z.boolean().optional().describe('查看 AI 图片卡片的全部结果图；此时 template_ids 只能有一个。'),
+      },
+      run: async ({ project_path, instance_id, template_ids, all_images = false }) => {
         const content = [];
-        for (const c of rows) {
+        if (all_images) {
+          if (template_ids.length !== 1) throw Error('INVALID_ARGUMENTS(library_preview): all_images takes exactly one template_id');
+          const { slim, raw } = seenLib.get(template_ids[0]);
+          const images = await d.callPlugin('library_images', { item: raw }, await homeWindow({ project_path, instance_id }));
+          for (const img of images) {
+            content.push({ type: 'text', text: `${slim.title}（template_id ${slim.template_id}，image_index ${img.image_index}）` });
+            content.push(img.url ? await imageContent(d, { url: img.url }) : { type: 'text', text: '图片地址获取失败' });
+          }
+          return { content };
+        }
+        for (const c of template_ids.map((id) => seenLib.get(id).slim)) {
           content.push({ type: 'text', text: `${c.title}（template_id ${c.template_id}）` });
           content.push(c.cover_url ? await imageContent(d, { url: c.cover_url }) : { type: 'text', text: '无封面图' });
         }
@@ -259,16 +279,17 @@ export function createServer(deps = {}) {
     {
       name: 'library_apply',
       description:
-        '把一个官方素材应用到目标工程：下载素材包、校验 MD5、按素材库面板相同的流程导入并默认放进场景（可撤销）。返回 added_objects（新放进场景的对象名和 object_path）。template_id 须来自本会话的 library_list / library_search。应用后用 capture_preview 验收。',
+        '把一个官方素材应用到目标工程，与素材库面板里点应用相同（可撤销）：素材包下载、校验 MD5、导入并默认放进场景；素材广场的卡片按 kind 走编辑器自己的应用流程（AI 图片、AI 妆容等只下载现成结果，不重新生成、不扣额度），等对象出现在场景里才返回。返回 kind、added_objects（新放进场景的对象名和 object_path）和 package_folders。template_id 须来自本会话的 library_list / library_search。应用后用 capture_preview 验收。',
       shape: {
         ...target,
         template_id: z.string().describe('library_list / library_search 返回的 template_id。'),
-        auto_instantiate: z.boolean().optional().describe('是否放进场景，默认 true；false 时只导入资源面板。'),
+        auto_instantiate: z.boolean().optional().describe('是否放进场景，默认 true；false 时只导入资源面板（只有 kind=package 支持）。'),
+        image_index: z.number().int().min(0).optional().describe('kind=ai_image 时用第几张结果图，默认 0；整组图见 library_preview 的 all_images。'),
       },
       run: async (a) => {
-        const { project_path, instance_id, template_id, auto_instantiate } = a;
+        const { project_path, instance_id, template_id, auto_instantiate, image_index } = a;
         const projectPath = await projects.resolveProjectPath({ project_path, instance_id });
-        const params = { item: seenLib.get(template_id).raw, ...(auto_instantiate === undefined ? {} : { auto_instantiate }) };
+        const params = { item: seenLib.get(template_id).raw, ...(auto_instantiate === undefined ? {} : { auto_instantiate }), ...(image_index === undefined ? {} : { image_index }) };
         return text(await d.callPlugin('library_apply', params, { projectPath, timeoutMs: 180000 }));
       },
     },
