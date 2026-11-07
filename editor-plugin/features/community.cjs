@@ -36,6 +36,10 @@ const SUBJECT_KINDS = { effect: 1, template: 2 };
 const SUBJECT_MAX = 20;
 // The editor's task window page reads task details with this mobile app version.
 const TASK_PAGE_APP_VERSION = '11.3.0';
+// The server's 「网络开小差了」 code, seen once on a growth task detail that the next three tries
+// returned; reads are retried once on it. The wait is picked, not measured (works search uses the same).
+const BUSY_CODE = '1';
+const BUSY_RETRY_MS = 500;
 
 const hasOwn = (o, k) => Object.prototype.hasOwnProperty.call(o, k);
 const first = (list) => (Array.isArray(list) && list.length ? list[0] : null);
@@ -55,7 +59,17 @@ function keepBigInts(key, value, context) {
   return typeof value === 'number' && Number.isInteger(value) && !Number.isSafeInteger(value) ? context.source : value;
 }
 
-async function request(lib, what, path, { query = {}, json, form } = {}) {
+async function request(lib, what, path, opts = {}) {
+  let out = await send(lib, what, path, opts);
+  if (out.code === BUSY_CODE && !opts.json && !opts.form) {
+    await new Promise((r) => setTimeout(r, BUSY_RETRY_MS));
+    out = await send(lib, what, path, opts);
+  }
+  if (out.code !== '0') throw Error(`${what}_FAILED: code=${out.code} message=${out.message}`);
+  return out.data;
+}
+
+async function send(lib, what, path, { query = {}, json, form } = {}) {
   lib.ensureCompatible('community');
   const base = lib.mod(M.urls).Domain.kBackendApiURL;
   const utils = lib.mod(M.bizUtils);
@@ -84,8 +98,7 @@ async function request(lib, what, path, { query = {}, json, form } = {}) {
   } catch (_) {
     throw Error(`${what}_FAILED: response is not JSON`);
   }
-  if (String(out.code) !== '0') throw Error(`${what}_FAILED: code=${out.code} message=${out.message || ''}`);
-  return out.data;
+  return { code: String(out.code), message: out.message || '', data: out.data };
 }
 
 function slimInspiration(i) {
