@@ -8,7 +8,7 @@
 - 官方素材库：浏览、搜索、看封面、应用（脸部变形、美型、AI 实时变脸、美妆、滤镜、贴纸、画面特效等），流程与素材库面板相同；包括「素材广场」（其他创作者分享的现成 AI 图片、AI 妆容、自定义实时变脸、贴纸和素材包，应用时不重新生成、不扣额度）和自己的「收藏」。
 - 「添加对象」菜单：工具栏美妆 / 美型 / AI 实时变脸里的全部官方功能项（美容、面部生成、表情生成、性别年龄、五官处理、身体换装等），可看示意图后按菜单项 ID 添加。
 - 首页作品：浏览、搜索、看封面，下载完整工程到本地或直接在编辑器里打开（官方工程和已发布的作品），供 agent 读取场景、脚本和资源，学习别人的做法；下载的东西都有登记，用完即删，最长保留 24 小时。
-- 交付：设置图标、特效检测（本地 + 云端）、打开提交窗口（发布由你在窗口里确认）、手机预览二维码、把已领取的任务或创作灵感绑定到工程。
+- 交付：设置图标、特效检测（和编辑器里点「特效检测」一样，云端检测）、打开提交窗口（发布由你在窗口里确认）、手机预览二维码、把已领取的任务或创作灵感绑定到工程。
 - 抖音音乐：按分类或关键词找歌，设为特效音乐。
 - 灵感、任务、排行榜：首页「灵感」页签和活动中心的任务（征集任务、成长任务），以及像塑移动版才有的排行榜（年轻 / 男生 / 女生喜爱榜、每日投稿榜、热玩互动榜、跟拍榜，各榜按两级分类细分；热点榜；专题合集里两百多期主题特效榜和模板榜；创新计划月榜和官方精选），用编辑器里登录的账号读取；可收藏灵感、领取任务。
 - 塑型画笔（FaceWarpX）强度：官方能读不能写，这里按检查器滑块的方式改。
@@ -44,8 +44,8 @@
 | `works_open` | 下载并在新窗口里按首页的方式打开（不弹版本升级提示，工程处于未保存状态），返回 pid 和 instance_id |
 | `works_cleanup` | 删除下载过的作品（含 `dest`）；编辑器窗口开着的保留，其它路径一律拒绝 |
 | `icon_set` / `icon_open` | 把一张图片裁成 360×360 PNG 设为工程图标（默认女性、男性两版，提交窗口要这两个）；或打开「图标制作」窗口 |
-| `effect_check` | 本地检查包体上限、是否原样套用模板、登录、图标；`cloud=true` 再跑「特效检测」云端性能检测（会上传特效包做测试） |
-| `submit_prepare` | 本地检查通过后走「提交特效」按钮的入口，只打开提交窗口；上传发布只在你点确认时发生 |
+| `effect_check` | 和工具栏「特效检测」按钮一样：打开特效检测窗口做云端检测（会上传特效包做测试，不是发布），等待结果 |
+| `submit_prepare` | 本地检查包体上限、是否原样套用模板、登录、图标，通过后走「提交特效」按钮的入口，只打开提交窗口；上传发布只在你点确认时发生 |
 | `mobile_preview` | 按手机预览方式打包上传到抖音预览服务，返回和编辑器一样的二维码（7 天有效），抖音 App 扫码真机看 |
 | `inspiration_nav` / `inspiration_list` / `inspiration_detail` | 灵感分类、分页列表、详情（说明、图片、奖励、关联热点、同灵感特效、是否已收藏） |
 | `inspiration_preview` | 一次最多 8 个灵感的封面 |
@@ -73,7 +73,7 @@
 - 套用官方素材：`library_search` → `library_preview` → `library_apply` → `capture_preview` → `save_project`。
 - 读别人的工程：`works_search`（或 `works_list`）→ `works_preview` → `works_download` → 按返回的 `outline.files` 读 `effect.dyehpj`、`Assets/` 下的场景和 `Graph/` 下的脚本 → `works_cleanup`。
 - 在编辑器里看别人的效果：`works_open` → `get_scene` / `capture_preview` → `project_close`（`discard_changes=true`）→ `works_cleanup`。
-- 交付：`icon_set` → `effect_check`（可加 `cloud=true`）→ `mobile_preview` 真机看 → `save_project` → `submit_prepare`，在提交窗口里填名称并确认发布。要参加任务的，`tasks_list` → `task_receive` → 再 `tasks_list` → `task_bind`。
+- 交付：`icon_set` → `effect_check` → `mobile_preview` 真机看 → `save_project` → `submit_prepare`，在提交窗口里填名称并确认发布。要参加任务的，`tasks_list` → `task_receive` → 再 `tasks_list` → `task_bind`。
 - 找选题：`rank_nav` → `rank_list`（如 `rank_type=1` 年轻喜爱榜、`categories=["人像美化","美妆"]`、`levels=["S","A+"]`）看什么在火；`rank_subjects`（`keyword="测一测"` 或 `kind="template"`）看各期主题榜；`rank_hotspots` → 带 `topic_id` 看热点灵感 → `inspiration_preview` / `inspiration_detail`；`tasks_list` → `task_detail` 看征集要求和奖项。
 - 看榜上特效的工程：`rank_list` → 把这页的 `effect_id` 和 `name` 交给 `works_by_effect` → `status=found` 的用返回的 `template_id` 走 `works_download` / `works_open`。
 - 拆别人的妆：`works_download` → `makeup_layers` 看用了哪些部位、什么颜色、多浓；自己的工程 `save_project` 后同样用 `makeup_layers` 查缺了哪些部位。

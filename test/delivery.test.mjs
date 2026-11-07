@@ -201,11 +201,11 @@ test('icon_open opens the icon creation window', () => {
   assert.deepEqual(calls.iconWindow, ['tool_bar']);
 });
 
-test('effect_check passes a clean project and removes its scratch export', async () => {
+test('submitChecks passes a clean project and removes its scratch export', async () => {
   const { lib, calls, instance, projectDir } = setup();
   fs.mkdirSync(path.join(projectDir, 'Icon'));
   fs.writeFileSync(path.join(projectDir, 'Icon/commonIcon.png'), 'x');
-  const out = await lib.effectCheck();
+  const out = await lib.submitChecks();
   assert.equal(out.ok, true, JSON.stringify(out.issues));
   assert.deepEqual(out.issues, []);
   assert.equal(out.package_bytes, 1000);
@@ -215,9 +215,9 @@ test('effect_check passes a clean project and removes its scratch export', async
   assert.deepEqual(leftovers(instance), []);
 });
 
-test('effect_check reports every reason the submit flow would refuse', async () => {
+test('submitChecks reports every reason the submit flow would refuse', async () => {
   const { lib, instance } = setup({ size: 6000, maxSize: 5000, sameAsTemplate: true, effectIdOk: false, loggedIn: false });
-  const out = await lib.effectCheck();
+  const out = await lib.submitChecks();
   assert.equal(out.ok, false);
   assert.deepEqual(
     out.issues.map((i) => i.split(':')[0]),
@@ -226,26 +226,27 @@ test('effect_check reports every reason the submit flow would refuse', async () 
   assert.deepEqual(leftovers(instance), []);
 });
 
-test('effect_check measures packages with remote assets the way the submit flow does', async () => {
+test('submitChecks measures packages with remote assets the way the submit flow does', async () => {
   const { lib } = setup({ size: 9000, maxSize: 5000, remote: 2 });
-  const out = await lib.effectCheck();
+  const out = await lib.submitChecks();
   assert.equal(out.package_bytes, 42);
   assert.ok(!out.issues.some((i) => i.startsWith('PACKAGE_TOO_LARGE')));
 });
 
-test('effect_check removes the scratch folder when the export fails', async () => {
+test('submitChecks removes the scratch folder when the export fails', async () => {
   const { lib, modules, instance } = setup();
   modules[M.ef].ProjectManager.getInstance().getActiveProject().effectExporter.exportEffectPackage = async () => ({ error: 'x' });
-  await assert.rejects(lib.effectCheck(), /EXPORT_FAILED/);
+  await assert.rejects(lib.submitChecks(), /EXPORT_FAILED/);
   assert.deepEqual(leftovers(instance), []);
 });
 
-test('effect_check_cloud listens before opening the window and maps the status code', async () => {
+test('effect_check only opens the 特效检测 window, listening first, and maps the status code', async () => {
   const done = setup({ perfStatus: 3 });
-  assert.deepEqual(await done.lib.effectCheckCloud({ timeout_ms: 1000 }), { finished: true, status_code: 3, result: 'needs_optimization' });
+  assert.deepEqual(await done.lib.effectCheck({ timeout_ms: 1000 }), { finished: true, status_code: 3, result: 'needs_optimization' });
   assert.equal(done.calls.showPerf, 1);
+  assert.deepEqual(done.calls.exportDirs, [], 'no local export');
   const slow = setup();
-  const out = await slow.lib.effectCheckCloud({ timeout_ms: 20 });
+  const out = await slow.lib.effectCheck({ timeout_ms: 20 });
   assert.equal(out.finished, false);
   assert.equal(out.result, 'timeout');
 });
@@ -279,9 +280,9 @@ test('mobile_preview exports like the toolbar popup and returns the QR text it w
   await assert.rejects(http.lib.mobilePreview(), /MOBILE_PREVIEW_HTTP_500/);
 });
 
-test('effect_check exports with the submit flow options', async () => {
+test('submitChecks exports with the submit flow options', async () => {
   const { lib, calls } = setup();
-  await lib.effectCheck();
+  await lib.submitChecks();
   assert.deepEqual(calls.exportOpts[0], { exportName: 'effect', zip: true, extra: { treeShakeIEJs: true, exportRemoteAssetJson: true } });
 });
 
@@ -371,14 +372,15 @@ test('icon_set prepares the image, hands the PNG to the plugin and always remove
   assert.equal(fs.existsSync(dir), false);
 });
 
-test('effect_check runs the cloud check only when asked, with a longer RPC timeout', async () => {
+test('effect_check makes the single cloud check call, with an RPC timeout longer than the wait', async () => {
   const seen = [];
-  const client = await connect({ callPlugin: async (method, params, opts) => (seen.push([method, params, opts.timeoutMs]), { ok: true, method }) });
-  assert.deepEqual(json(await client.callTool({ name: 'effect_check', arguments: {} })), { ok: true, method: 'effect_check' });
-  assert.equal(seen.length, 1);
-  const both = json(await client.callTool({ name: 'effect_check', arguments: { cloud: true, timeout_ms: 60000 } }));
-  assert.equal(both.cloud.method, 'effect_check_cloud');
-  assert.deepEqual(seen[2], ['effect_check_cloud', { timeout_ms: 60000 }, 90000]);
+  const client = await connect({ callPlugin: async (method, params, opts) => (seen.push([method, params, opts.timeoutMs]), { finished: true, method }) });
+  assert.deepEqual(json(await client.callTool({ name: 'effect_check', arguments: {} })), { finished: true, method: 'effect_check' });
+  assert.deepEqual(seen, [['effect_check', { timeout_ms: 300000 }, 330000]]);
+  await client.callTool({ name: 'effect_check', arguments: { timeout_ms: 60000 } });
+  assert.deepEqual(seen[1], ['effect_check', { timeout_ms: 60000 }, 90000]);
+  const old = await client.callTool({ name: 'effect_check', arguments: { cloud: true } });
+  assert.equal(old.isError, true);
 });
 
 test('mobile_preview returns the QR image of the text the editor would encode', async () => {

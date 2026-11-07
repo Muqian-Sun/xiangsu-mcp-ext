@@ -71,10 +71,11 @@ const methods = {
     return { opened: true };
   },
 
-  // Local checks the submit flow would fail on, without uploading anything: package size against the
-  // submit limit, unchanged-template detection, login and icons. The editor's minimum-SDK helper is
-  // left out: it resolves a relative export folder against the process cwd ('/') and fails here.
-  async effectCheck() {
+  // submit_prepare's gate: what the submit flow would refuse, checked locally so the agent learns the
+  // reason (the editor only shows it in a toast): package size against the submit limit,
+  // unchanged-template detection, login and icons. The editor's minimum-SDK helper is left out: it
+  // resolves a relative export folder against the process cwd ('/') and fails here.
+  async submitChecks() {
     this.ensureCompatible('check');
     const project = activeProject(this);
     const api = this.mod(M.orionui).ExtensionManager.host.getAPI(this.mod(M.submission).EffectSubmissionAPIKey);
@@ -108,9 +109,10 @@ const methods = {
     };
   },
 
-  // The toolbar's 特效检测: opens its window, whose page uploads the package and runs the cloud check,
-  // then reports a status code back through getPerfTestStatus. Details stay visible in that window.
-  async effectCheckCloud({ timeout_ms = 300000 } = {}) {
+  // The toolbar's 特效检测 button (PerfTestButton) only opens this window; its page uploads the package
+  // and runs the cloud check, then reports a status code back through getPerfTestStatus. Details stay
+  // visible in that window.
+  async effectCheck({ timeout_ms = 300000 } = {}) {
     this.ensureCompatible('check');
     activeProject(this);
     const bus = this.mod(M.events).BusinessEventManager.TypeGuard();
@@ -126,7 +128,7 @@ const methods = {
   // window. Nothing is uploaded or published until the user confirms in that window.
   async submitPrepare() {
     this.ensureCompatible('submit');
-    const check = await this.effectCheck();
+    const check = await this.submitChecks();
     if (!check.ok) return { opened: false, check };
     const EF = this.mod(M.ef);
     const opened = nextEvent(EF.EventManager_deprecated.TypeGuard(), 'OnSubmitWindowOpened', SUBMIT_WINDOW_WAIT_MS, () => null);
@@ -167,7 +169,6 @@ const METHODS = {
   icon_set: 'iconSet',
   icon_open: 'iconOpen',
   effect_check: 'effectCheck',
-  effect_check_cloud: 'effectCheckCloud',
   submit_prepare: 'submitPrepare',
   mobile_preview: 'mobilePreview',
 };
