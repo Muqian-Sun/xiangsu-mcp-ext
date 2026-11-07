@@ -31,7 +31,6 @@ const M = {
   toolbar: '@orion/Business/EditWindow/ToolBar',
   ipc: '@orion/Business/MultipleProjects/ProcessCommunication/IPCCommands',
   sender: '@orion/Business/MultipleProjects/ProcessCommunication/EditProcess/EditSender',
-  multiProcess: '@orion/Business/MultipleProjects/MultiProcess',
   worksPanel: '@orion/Business/HomeWindow/TemplatesPanel/Request/templatesPanel',
   worksCategory: '@orion/Business/HomeWindow/TemplatesPanel/Request/templatesCategory',
   worksUtil: '@orion/Business/HomeWindow/TemplatesPanel/Model/util',
