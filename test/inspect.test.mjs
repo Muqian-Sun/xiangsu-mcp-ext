@@ -363,9 +363,132 @@ test('previewFrame returns the cached full-size preview frame, retrying while th
   await assert.rejects(new Library(() => undefined).previewFrame(), /INCOMPATIBLE_EDITOR: missing .*PreviewManager/);
 });
 
+// A fake preview: PreviewSyncer reload events, the texture event bus, recording and background mode.
+function previewEngine() {
+  const listeners = new Map();
+  const on = (ev, fn) => listeners.set(ev, [...(listeners.get(ev) || []), fn]);
+  const off = (ev, fn) => listeners.set(ev, (listeners.get(ev) || []).filter((f) => f !== fn));
+  const emit = (ev) => [...(listeners.get(ev) || [])].forEach((f) => f());
+  const log = [];
+  const engine = { log, emit, listeners, recording: false, onReload: () => {} };
+  class PreviewSyncer {
+    static getInstance() {
+      return syncer;
+    }
+    static addListener(ev, fn) {
+      on(ev, fn);
+    }
+    static removeListener(ev, fn) {
+      off(ev, fn);
+    }
+    requestReloadSticker() {
+      log.push('reload');
+      engine.onReload();
+    }
+  }
+  const syncer = new PreviewSyncer();
+  class PreviewManager {
+    static getInstance() {
+      return pm;
+    }
+    isRecording() {
+      return engine.recording;
+    }
+  }
+  const pm = new PreviewManager();
+  class BackgroundModeManager {
+    static getInstance() {
+      return bg;
+    }
+    setRecordingMode(v) {
+      log.push(`recording:${v}`);
+    }
+  }
+  const bg = new BackgroundModeManager();
+  const win = { windowState: 0, visible: 1 };
+  engine.win = win;
+  const modules = {
+    [M.ef]: { PreviewSyncer },
+    [M.events]: { BusinessEventManager: { TypeGuard: () => ({ on, off }) } },
+    [M.preview]: { PreviewManager },
+    [M.backgroundMode]: { BackgroundModeManager },
+    [M.orionui]: { WindowState: { Normal: 0, Minimized: 1 } },
+    [M.editWindow]: { EditWindowController: { getInstance: () => ({ getWindow: () => engine.win }) } },
+  };
+  engine.lib = new Library((id) => modules[id]);
+  engine.lib.previewTiming = { reloadTimeoutMs: 60, frameTimeoutMs: 60 };
+  return engine;
+}
+
+test('preview_reset returns at the second frame drawn after the reload, ignoring frames from before it', async () => {
+  const e = previewEngine();
+  e.onReload = () => {
+    e.emit('PreviewTextureUpdated');
+    setTimeout(() => {
+      e.emit('PreviewReloaded');
+      e.emit('PreviewTextureUpdated');
+      setTimeout(() => {
+        e.log.push('second frame');
+        e.emit('PreviewTextureUpdated');
+      }, 10);
+    }, 10);
+  };
+  const out = await e.lib.previewReset();
+  e.log.push('returned');
+  assert.deepEqual(e.log, ['reload', 'second frame', 'returned']);
+  assert.ok(out.reloaded_ms >= 0 && out.ready_ms >= out.reloaded_ms, JSON.stringify(out));
+  assert.ok([...e.listeners.values()].every((l) => l.length === 0), 'listeners removed');
+});
+
+test('preview_reset fails loudly when the reload or the frames after it never come', async () => {
+  const silent = previewEngine();
+  await assert.rejects(silent.lib.previewReset(), /PREVIEW_RELOAD_TIMEOUT: the preview did not reload within 60 ms/);
+  assert.ok([...silent.listeners.values()].every((l) => l.length === 0));
+  const stuck = previewEngine();
+  stuck.onReload = () => setTimeout(() => (stuck.emit('PreviewReloaded'), stuck.emit('PreviewTextureUpdated')), 5);
+  await assert.rejects(stuck.lib.previewReset(), /NO_FRESH_PREVIEW_FRAME: the preview did not draw 2 frames after reloading within 60 ms/);
+  assert.ok([...stuck.listeners.values()].every((l) => l.length === 0));
+});
+
+test('preview_full_rate holds recording mode until released or the hold runs out, and leaves a user recording alone', async () => {
+  const e = previewEngine();
+  assert.deepEqual(e.lib.previewFullRate({ hold_ms: 1000 }), { held: true });
+  assert.deepEqual(e.lib.previewFullRate({ hold_ms: 1000 }), { held: true });
+  assert.deepEqual(e.lib.previewFullRate({ hold_ms: 0 }), { held: false });
+  assert.deepEqual(e.lib.previewFullRate({ hold_ms: 0 }), { held: false });
+  assert.deepEqual(e.log, ['recording:true', 'recording:true', 'recording:false']);
+
+  e.log.length = 0;
+  e.lib.previewFullRate({ hold_ms: 20 });
+  await new Promise((r) => setTimeout(r, 60));
+  assert.deepEqual(e.log, ['recording:true', 'recording:false']);
+
+  e.log.length = 0;
+  e.recording = true;
+  assert.deepEqual(e.lib.previewFullRate({ hold_ms: 1000 }), { held: false, reason: 'recording' });
+  e.recording = false;
+  e.lib.previewFullRate({ hold_ms: 1000 });
+  e.recording = true;
+  e.lib.previewFullRate({ hold_ms: 0 });
+  assert.deepEqual(e.log, ['recording:true']);
+  assert.throws(() => e.lib.previewFullRate({ hold_ms: -1 }), /INVALID_HOLD_MS/);
+});
+
+test('preview_window reports the edit window as visible only when shown and not minimized', () => {
+  const e = previewEngine();
+  assert.deepEqual(e.lib.previewWindow(), { visible: true, minimized: false, window: true });
+  e.win.windowState = 1;
+  assert.deepEqual(e.lib.previewWindow(), { visible: false, minimized: true, window: true });
+  e.win.windowState = 0;
+  e.win.visible = 0;
+  assert.deepEqual(e.lib.previewWindow(), { visible: false, minimized: false, window: true });
+  e.win = null;
+  assert.deepEqual(e.lib.previewWindow(), { visible: false, minimized: false, window: false });
+});
+
 const JPG = Buffer.from('ffd8ffe000104a46494600010100000100010000ffd9', 'hex').toString('base64');
 
-function fakeOfficial({ resetOk = true, failSet, instances = [{ instance_id: '2', project_path: '/proj/A', generation: '100-1' }] } = {}) {
+function fakeOfficial({ failSet, instances = [{ instance_id: '2', project_path: '/proj/A', generation: '100-1' }] } = {}) {
   const calls = [];
   return {
     calls,
@@ -381,7 +504,6 @@ function fakeOfficial({ resetOk = true, failSet, instances = [{ instance_id: '2'
         if (args.guid === 'r1') return { kind: 'resource', name: '材质', type: 'Material', filePath: '/proj/A/Assets/m.omtl' };
         return { ...INSPECT, components: [...INSPECT.components, { type: 'MeshRenderer', guid: 'c3', properties: { sharedMaterials: [{ guid: 'r1' }] } }] };
       }
-      if (name === 'interact_by_dsl') return { success: resetOk, results: [{ command_type: 'reset_preview', status: resetOk ? 'success' : 'failed' }] };
       if (name === 'get_current_preview_video') return { tracking_type: 'face', video_name: 'preview_single_blink||女', resource_url: '/v/blink.mp4' };
       if (name === 'set_preview_video') {
         if (failSet && args.video_name === failSet) throw Error('OFFICIAL_TOOL_ERROR(set_preview_video): no such video');
@@ -444,9 +566,22 @@ test('inspect_many inspects each guid, filters, resolves bound resources and iso
   assert.deepEqual(official.calls.filter((c) => c[0] === 'inspect').map((c) => c[1].guid), ['s21', 'r1', 'bad', 's22']);
 });
 
-function framePlugin() {
+function framePlugin({ window = { visible: true, minimized: false, window: true }, fail = {} } = {}) {
   const calls = [];
-  return { calls, callPlugin: async (method, params, opts) => (calls.push([method, opts.projectPath]), { mimeType: 'image/jpeg', data: JPG }) };
+  const answers = {
+    preview_frame: () => ({ mimeType: 'image/jpeg', data: JPG }),
+    preview_reset: () => ({ reloaded_ms: 700, ready_ms: 1100 }),
+    preview_full_rate: ({ hold_ms }) => ({ held: hold_ms > 0 }),
+    preview_window: () => window,
+  };
+  return {
+    calls,
+    callPlugin: async (method, params, opts) => {
+      calls.push(method === 'preview_full_rate' ? [method, opts.projectPath, params.hold_ms] : [method, opts.projectPath]);
+      if (fail[method]) throw Error(fail[method]);
+      return answers[method](params);
+    },
+  };
 }
 
 test('preview_frames resets, takes full-size frames from the plugin, saves and crops each one', async () => {
@@ -457,8 +592,15 @@ test('preview_frames resets, takes full-size frames from the plugin, saves and c
   const root = tmpdir('xs-frames-');
   const client = await connect({ official, ...plugin, sleep: async (ms) => sleeps.push(ms), framesDir: () => fs.mkdtempSync(path.join(root, 'f-')), cropImage: async (f, box) => crops.push([f, box]) });
   const res = await client.callTool({ name: 'preview_frames', arguments: { instance_id: '2', count: 3, interval_ms: 500, crop: { x: 0.2, y: 0.1, width: 0.6, height: 0.4 } } });
-  assert.deepEqual(official.calls.find((c) => c[0] === 'interact_by_dsl')[1].commands, [{ command_type: 'reset_preview', params: {} }]);
-  assert.deepEqual(plugin.calls, [['preview_frame', '/proj/A'], ['preview_frame', '/proj/A'], ['preview_frame', '/proj/A']]);
+  assert.deepEqual(plugin.calls, [
+    ['preview_full_rate', '/proj/A', 20000 + 3 * 500 + 30000],
+    ['preview_reset', '/proj/A'],
+    ['preview_frame', '/proj/A'],
+    ['preview_frame', '/proj/A'],
+    ['preview_frame', '/proj/A'],
+    ['preview_full_rate', '/proj/A', 0],
+  ]);
+  assert.ok(!official.calls.some((c) => c[0] === 'interact_by_dsl'));
   assert.equal(sleeps.length, 2);
   assert.ok(sleeps.every((ms) => ms > 400 && ms <= 1000), `${sleeps}`);
   const summary = JSON.parse(res.content[0].text);
@@ -476,11 +618,13 @@ test('preview_frames resets, takes full-size frames from the plugin, saves and c
 test('preview_frames shoots each video in turn, switches back once even on failure, and notes the save', async () => {
   const official = fakeOfficial();
   const keep = path.join(tmpdir('xs-keep-'), 'frames');
-  const client = await connect({ official, ...framePlugin(), sleep: async () => {} });
+  const plugin = framePlugin();
+  const client = await connect({ official, ...plugin, sleep: async () => {} });
   const res = await client.callTool({ name: 'preview_frames', arguments: { instance_id: '2', count: 2, videos: ['preview_single_shake_head||女', 'preview_double||双人'], reset: false, save_to: keep } });
   const sets = official.calls.filter((c) => c[0] === 'set_preview_video').map((c) => c[1].video_name);
   assert.deepEqual(sets, ['preview_single_shake_head||女', 'preview_double||双人', 'preview_single_blink||女']);
-  assert.ok(!official.calls.some((c) => c[0] === 'interact_by_dsl'));
+  assert.deepEqual(plugin.calls.map((c) => c[0]), ['preview_full_rate', 'preview_frame', 'preview_frame', 'preview_full_rate', 'preview_frame', 'preview_frame', 'preview_full_rate']);
+  assert.equal(plugin.calls.at(-1)[2], 0);
   const summary = JSON.parse(res.content[0].text);
   assert.deepEqual(summary.files, ['v1-frame-1.jpg', 'v1-frame-2.jpg', 'v2-frame-1.jpg', 'v2-frame-2.jpg'].map((f) => path.join(keep, f)));
   for (const f of summary.files) assert.ok(fs.existsSync(f));
@@ -489,13 +633,64 @@ test('preview_frames shoots each video in turn, switches back once even on failu
   assert.match(res.content[1].text, /^preview_single_shake_head\|\|女 第 1 帧/);
 
   const failing = fakeOfficial({ failSet: 'preview_double||双人' });
-  const c2 = await connect({ official: failing, ...framePlugin(), sleep: async () => {}, framesDir: () => tmpdir('xs-f-') });
+  const p2 = framePlugin();
+  const c2 = await connect({ official: failing, ...p2, sleep: async () => {}, framesDir: () => tmpdir('xs-f-') });
   const bad = await c2.callTool({ name: 'preview_frames', arguments: { instance_id: '2', videos: ['preview_single_shake_head||女', 'preview_double||双人'] } });
   assert.equal(bad.isError, true);
   assert.deepEqual(failing.calls.filter((c) => c[0] === 'set_preview_video').map((c) => c[1].video_name), ['preview_single_shake_head||女', 'preview_double||双人', 'preview_single_blink||女']);
+  assert.deepEqual(p2.calls.at(-1), ['preview_full_rate', '/proj/A', 0]);
 
   const tooMany = await c2.callTool({ name: 'preview_frames', arguments: { instance_id: '2', count: 7, videos: ['a', 'b', 'c', 'd'] } });
   assert.match(tooMany.content[0].text, /TOO_MANY_FRAMES: 28/);
-  const c3 = await connect({ official: fakeOfficial({ resetOk: false }), ...framePlugin(), sleep: async () => {}, framesDir: () => tmpdir('xs-f-') });
-  assert.match((await c3.callTool({ name: 'preview_frames', arguments: { instance_id: '2' } })).content[0].text, /RESET_PREVIEW_FAILED/);
+  const p3 = framePlugin({ fail: { preview_reset: 'PREVIEW_RELOAD_TIMEOUT: the preview did not reload within 15000 ms' } });
+  const c3 = await connect({ official: fakeOfficial(), ...p3, sleep: async () => {}, framesDir: () => tmpdir('xs-f-') });
+  assert.match((await c3.callTool({ name: 'preview_frames', arguments: { instance_id: '2' } })).content[0].text, /PREVIEW_RELOAD_TIMEOUT/);
+  assert.deepEqual(p3.calls.map((c) => c[0]), ['preview_full_rate', 'preview_reset', 'preview_full_rate']);
+  assert.equal(p3.calls.at(-1)[2], 0);
+});
+
+test('capture_preview goes to the official tool while the window is visible', async () => {
+  const official = { ...fakeOfficial(), callTool: async (name, args) => (official.calls.push(['callTool', name, args]), { content: [{ type: 'text', text: 'official' }] }) };
+  const plugin = framePlugin();
+  const client = await connect({ official, ...plugin });
+  const res = await client.callTool({ name: 'capture_preview', arguments: { instance_id: '2', intention: 'x' } });
+  assert.equal(res.content[0].text, 'official');
+  assert.deepEqual(official.calls.at(-1), ['callTool', 'capture_preview', { instance_id: '2', intention: 'x' }]);
+  assert.deepEqual(plugin.calls, [['preview_window', '/proj/A']]);
+});
+
+test('capture_preview takes a minimized window from the render output at the official size', async () => {
+  const official = { ...fakeOfficial(), callTool: async () => assert.fail('official screenshot of a minimized window is black') };
+  const plugin = framePlugin({ window: { visible: false, minimized: true, window: true } });
+  const resized = [];
+  const client = await connect({ official, ...plugin, framesDir: () => tmpdir('xs-cap-'), resizeImage: async (f, side) => resized.push([f, side]) });
+  const res = await client.callTool({ name: 'capture_preview', arguments: { instance_id: '2', intention: 'x' } });
+  assert.deepEqual(plugin.calls.map((c) => c[0]), ['preview_window', 'preview_full_rate', 'preview_reset', 'preview_frame', 'preview_full_rate']);
+  assert.equal(plugin.calls.at(-1)[2], 0);
+  assert.deepEqual(resized.map((r) => [path.basename(r[0]), r[1]]), [['capture_preview.jpg', 569]]);
+  const info = JSON.parse(res.content[0].text);
+  assert.equal(info.source, 'render_output');
+  assert.match(info.note, /最小化/);
+  assert.equal(res.content[1].type, 'image');
+  assert.equal(res.content[1].data, JPG);
+
+  const failing = framePlugin({ window: { visible: false, minimized: true, window: true }, fail: { preview_frame: 'NO_PREVIEW_FRAME: x' } });
+  const c2 = await connect({ official, ...failing, framesDir: () => tmpdir('xs-cap-'), resizeImage: async () => {} });
+  const bad = await c2.callTool({ name: 'capture_preview', arguments: { instance_id: '2' } });
+  assert.equal(bad.isError, true);
+  assert.match(bad.content[0].text, /NO_PREVIEW_FRAME/);
+  assert.deepEqual(failing.calls.at(-1), ['preview_full_rate', '/proj/A', 0]);
+});
+
+test('capture_preview falls back to the official tool with a note when the window cannot be checked', async () => {
+  const replies = { ok: { content: [{ type: 'text', text: 'official' }] }, err: { content: [{ type: 'text', text: 'no such instance' }], isError: true } };
+  let reply = replies.ok;
+  const official = { ...fakeOfficial(), callTool: async () => reply };
+  const client = await connect({ official, ...framePlugin({ fail: { preview_window: 'NO_PLUGIN_INSTANCE for /proj/A' } }) });
+  const res = await client.callTool({ name: 'capture_preview', arguments: { instance_id: '2' } });
+  assert.equal(res.content[0].text, 'official');
+  assert.match(res.content[1].text, /未能检查窗口是否可见（NO_PLUGIN_INSTANCE for \/proj\/A）/);
+  reply = replies.err;
+  const unknown = await client.callTool({ name: 'capture_preview', arguments: { instance_id: '9' } });
+  assert.deepEqual(unknown.content, replies.err.content);
 });

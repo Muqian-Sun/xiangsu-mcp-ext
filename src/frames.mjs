@@ -33,3 +33,8 @@ export async function cropImage(file, box, { exec = run } = {}) {
   await exec('sips', ['-c', String(ch), String(cw), '--cropOffset', String(y), String(x), file, '--out', file]);
   return { width: cw, height: ch };
 }
+
+// Scales the image in place so its longer side is `maxSide`, keeping the aspect ratio.
+export async function resizeImage(file, maxSide, { exec = run } = {}) {
+  await exec('sips', ['-Z', String(maxSide), file, '--out', file]);
+}
