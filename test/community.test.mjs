@@ -699,6 +699,190 @@ test('community calls refuse without sending anything when the editor modules ar
   assert.equal(calls.length, 0);
 });
 
+// Trimmed from the account's real 作品 list and review records (2026-11-07).
+const ART_FAILED = {
+  id: '92139627',
+  name: '我和codex三天',
+  icon: 'https://cdn/a2.png',
+  effect_status: 101,
+  effect_status_desc: '审核未通过',
+  b_task: '玩法孵化之热梗语录定向征集',
+  b_hot: '',
+  b_ins: '【创新】【热梗语录】我和codex三天',
+  can_delete: true,
+  can_edit: true,
+  can_appeal: true,
+  appeal_types: [{ appeal_type: 0, appeal_type_text: '作品审核不通过' }],
+  created_at: '1794049306000',
+};
+const ART_REVIEWING = { id: '92146750', name: '把手握紧什么都没有', effect_status: 100, effect_status_desc: '审核中', b_task: '', b_hot: '', b_ins: '', can_delete: true, can_edit: false, can_appeal: false, appeal_types: [], created_at: '1794053427000' };
+const ART_ONLINE = {
+  id: '92032977',
+  name: '灭建国是谁呀',
+  effect_status: 103,
+  effect_status_desc: '已上线',
+  app_effect_id: 286017094,
+  app_effect_id_str: '286017094',
+  first_online_at: '1794012899000',
+  pub_num: '0',
+  can_appeal: false,
+  appeal_types: [],
+  created_at: '1793981766000',
+};
+const REVIEWS = [
+  {
+    title: '审核未通过',
+    detail_desc: '特效未通过审核,原因如下：\n|<b>特效不符合规范<b>|\n特效中可能含有涉及展示或宣扬不同群体攻击对立类内容。\n\n未通过特效可直接编辑修改后重新提交，过审速度更快',
+    created_at: 1794052023000,
+  },
+  { title: '提交成功', detail_desc: '', created_at: 1794049308000 },
+  { title: '审核中', detail_desc: '特效已进入审核流程，预计1个工作日内完成，点击了解更多|<a><href>https://effect.douyin.com/content/3z7xbu37/ojv9vjeb<href>审核规则<a>|', created_at: 1794049308000 },
+];
+const REJECTED_TEXT = '特效未通过审核,原因如下：\n特效不符合规范\n特效中可能含有涉及展示或宣扬不同群体攻击对立类内容。\n\n未通过特效可直接编辑修改后重新提交，过审速度更快';
+// review_nodes answered code 0 without data for every real effect tried; the page then reads effect_reviews.
+const NO_NODES = JSON.stringify({ code: 0, message: 'success' });
+const artworks = (effects, sort = '["2026-11-07T19:01:46.000Z",92139627]') => ok({ sort, count: effects.length, total: 5, effects });
+
+test('effects_mine pages by the returned sort key and attaches the latest review to failed effects only', async () => {
+  const { lib, to } = setup({
+    'GET /effectcam/v1/artworks': (call) => artworks(call.query.sort ? [ART_ONLINE] : [ART_REVIEWING, ART_FAILED]),
+    'GET /cam_api/effect/v1/review_nodes': NO_NODES,
+    'GET /effectcam/v1/effect_reviews': ok(REVIEWS),
+  });
+  const first = await lib.effectsMine({ count: 2 });
+  assert.deepEqual(to('/effectcam/v1/artworks')[0].query, { count: '2' });
+  assert.deepEqual(first.items[1], {
+    effect_id: '92139627',
+    name: '我和codex三天',
+    status: 101,
+    status_text: '审核未通过',
+    created_at: new Date(1794049306000).toISOString(),
+    online_at: null,
+    app_effect_id: null,
+    task: '玩法孵化之热梗语录定向征集',
+    inspiration: '【创新】【热梗语录】我和codex三天',
+    hotspot: null,
+    can_edit: true,
+    can_delete: true,
+    can_appeal: true,
+    appeal_types: ['作品审核不通过'],
+    pub_count: null,
+    icon_url: 'https://cdn/a2.png',
+    review: { title: '审核未通过', at: new Date(1794052023000).toISOString(), text: REJECTED_TEXT, refuse_reasons: [], links: [] },
+  });
+  assert.equal('review' in first.items[0], false);
+  assert.deepEqual(to('/cam_api/effect/v1/review_nodes').map((c) => c.query), [{ effect_id: '92139627', review_type: '1' }]);
+  assert.deepEqual(to('/effectcam/v1/effect_reviews').map((c) => c.query), [{ effect_id: '92139627' }]);
+  assert.deepEqual({ total: first.total, next: first.next_cursor, more: first.has_more }, { total: 5, next: '["2026-11-07T19:01:46.000Z",92139627]', more: true });
+  const last = await lib.effectsMine({ cursor: first.next_cursor, count: 2 });
+  assert.deepEqual(to('/effectcam/v1/artworks')[1].query, { count: '2', sort: '["2026-11-07T19:01:46.000Z",92139627]' });
+  assert.deepEqual(last.items[0], {
+    effect_id: '92032977',
+    name: '灭建国是谁呀',
+    status: 103,
+    status_text: '已上线',
+    created_at: new Date(1793981766000).toISOString(),
+    online_at: new Date(1794012899000).toISOString(),
+    app_effect_id: '286017094',
+    task: null,
+    inspiration: null,
+    hotspot: null,
+    can_edit: false,
+    can_delete: false,
+    can_appeal: false,
+    appeal_types: [],
+    pub_count: '0',
+    icon_url: null,
+  });
+  assert.deepEqual({ next: last.next_cursor, more: last.has_more }, { next: null, more: false });
+  assert.equal(to('/effectcam/v1/effect_reviews').length, 1);
+});
+
+test('effects_mine reads reviews for test and appeal failures too, from review_nodes when it has records', async () => {
+  const { lib, to } = setup({
+    'GET /effectcam/v1/artworks': artworks([
+      { ...ART_FAILED, id: '1', effect_status: 112 },
+      { ...ART_FAILED, id: '2', effect_status: 119 },
+      { ...ART_FAILED, id: '3', effect_status: 118 },
+    ]),
+    'GET /cam_api/effect/v1/review_nodes': (call) => ok([{ title: `节点${call.query.effect_id}`, detail_desc: '', created_at: 5 }]),
+  });
+  const out = await lib.effectsMine({});
+  assert.deepEqual(out.items.map((i) => i.review && i.review.title), ['节点1', '节点2', undefined]);
+  assert.deepEqual({ next: out.next_cursor, more: out.has_more }, { next: null, more: false });
+  assert.deepEqual(to('/effectcam/v1/artworks')[0].query, { count: '20' });
+  assert.equal(to('/cam_api/effect/v1/review_nodes').length, 2);
+});
+
+test('online reviews fall back to effect_reviews when review_nodes fails, and fail on unreadable records', async () => {
+  const fallback = setup({
+    'GET /effectcam/v1/artworks': artworks([ART_FAILED]),
+    'GET /cam_api/effect/v1/review_nodes': JSON.stringify({ code: 400, message: '参数错误' }),
+    'GET /effectcam/v1/effect_reviews': ok(REVIEWS),
+  });
+  assert.equal((await fallback.lib.effectsMine({})).items[0].review.text, REJECTED_TEXT);
+  const down = setup({
+    'GET /effectcam/v1/artworks': artworks([ART_FAILED]),
+    'GET /cam_api/effect/v1/review_nodes': NO_NODES,
+    'GET /effectcam/v1/effect_reviews': JSON.stringify({ code: 500, message: '内部错误' }),
+  });
+  await assert.rejects(down.lib.effectsMine({}), /GET_EFFECT_REVIEWS_FAILED: code=500 message=内部错误/);
+  const odd = setup({
+    'GET /effectcam/v1/artworks': artworks([ART_FAILED]),
+    'GET /cam_api/effect/v1/review_nodes': ok({ nodes: [] }),
+  });
+  await assert.rejects(odd.lib.effectsMine({}), /GET_REVIEW_NODES_FAILED: expected a list of review records/);
+});
+
+test('effect_reviews returns both review timelines with the markup read like the review record page', async () => {
+  // The refuse_reason shape comes from the review record page's code; no real effect carried one yet.
+  const reasons = {
+    title: '审核未通过',
+    detail_desc: '',
+    created_at: 1794052023000,
+    refuse_reason: [{ title: '画面问题', content: ['贴纸遮挡五官', '文字过小'], detail: '修改后可|<mark>重新提交<mark>||<br>详见|<a><href>https://x/rule<href>规则<a>|' }],
+  };
+  const { lib, to } = setup({
+    'GET /effectcam/v2/effect_detail': ok({ base: { id: '92139627', name: '我和codex三天', effect_status: 101, effect_status_desc: '审核未通过' }, extra: { b_task: '玩法孵化之热梗语录定向征集' } }),
+    'GET /cam_api/effect/v1/review_nodes': (call) => (call.query.review_type === '2' ? ok([reasons]) : NO_NODES),
+    'GET /effectcam/v1/effect_reviews': ok(REVIEWS),
+  });
+  const out = await lib.effectReviews({ effect_id: ' 92139627 ' });
+  assert.deepEqual(to('/effectcam/v2/effect_detail')[0].query, { effect_id: '92139627' });
+  assert.deepEqual(to('/cam_api/effect/v1/review_nodes').map((c) => c.query.review_type).sort(), ['1', '2']);
+  assert.deepEqual({ name: out.name, status: out.status, status_text: out.status_text, task: out.task }, { name: '我和codex三天', status: 101, status_text: '审核未通过', task: '玩法孵化之热梗语录定向征集' });
+  assert.deepEqual(out.reviews.map((r) => r.title), ['审核未通过', '提交成功', '审核中']);
+  assert.deepEqual(out.reviews[2], {
+    title: '审核中',
+    at: new Date(1794049308000).toISOString(),
+    text: '特效已进入审核流程，预计1个工作日内完成，点击了解更多审核规则',
+    refuse_reasons: [],
+    links: [{ text: '审核规则', url: 'https://effect.douyin.com/content/3z7xbu37/ojv9vjeb' }],
+  });
+  assert.deepEqual(out.innovation_reviews, [
+    {
+      title: '审核未通过',
+      at: new Date(1794052023000).toISOString(),
+      text: '',
+      refuse_reasons: [{ title: '画面问题', items: ['贴纸遮挡五官', '文字过小'], detail: '修改后可重新提交\n详见规则' }],
+      links: [{ text: '规则', url: 'https://x/rule' }],
+    },
+  ]);
+});
+
+test('effect_reviews rejects blank ids and passes on the refusal for effects of other accounts', async () => {
+  // The real answer for another account's effect and for an unknown id (2026-11-07).
+  const refused = JSON.stringify({ code: 1301, message: '参数不正确，请正确访问' });
+  const { lib, calls } = setup({
+    'GET /effectcam/v2/effect_detail': refused,
+    'GET /cam_api/effect/v1/review_nodes': refused,
+    'GET /effectcam/v1/effect_reviews': refused,
+  });
+  await assert.rejects(lib.effectReviews({ effect_id: ' ' }), /INVALID_EFFECT_ID/);
+  assert.equal(calls.length, 0);
+  await assert.rejects(lib.effectReviews({ effect_id: '88649924' }), /code=1301 message=参数不正确，请正确访问/);
+});
+
 async function connect(deps) {
   const official = { url: 'x', listTools: async () => [], status: () => ({}), callJson: async () => ({ instances: [] }) };
   const server = createServer({ official, ...deps });
@@ -787,6 +971,28 @@ test('task tools take the tasks_list task_id and hand the plugin the id each tas
   assert.match((await call('task_receive', { task_id: 'A1' })).content[0].text, /TASK_NOT_RECEIVABLE: A1 is not an effect task \(kind=activity\)/);
   assert.match((await call('task_bind', { path: '/proj/X', task_id: 'headdress_decoration' })).content[0].text, /TASK_NOT_BINDABLE: headdress_decoration is a growth task/);
   assert.equal(seen.filter((s) => s.method === 'task_receive').length, 1);
+});
+
+test('effects_mine and effect_reviews go to the lowest-pid window and check their arguments', async () => {
+  const seen = [];
+  const client = await connect({
+    listInstances: () => [{ pid: 300 }, { pid: 200 }],
+    callPlugin: async (method, params, opts) => (seen.push({ method, params, opts }), { method }),
+  });
+  const call = (name, args) => client.callTool({ name, arguments: args });
+  assert.deepEqual(JSON.parse((await call('effects_mine', { cursor: '["x",1]', count: 50 })).content[0].text), { method: 'effects_mine' });
+  assert.deepEqual(seen[0], { method: 'effects_mine', params: { cursor: '["x",1]', count: 50 }, opts: { pid: 200 } });
+  await call('effect_reviews', { effect_id: '92139627' });
+  assert.deepEqual(seen[1], { method: 'effect_reviews', params: { effect_id: '92139627' }, opts: { pid: 200 } });
+  for (const [name, args] of [
+    ['effects_mine', { count: 51 }],
+    ['effects_mine', { cursor: '' }],
+    ['effect_reviews', { effect_id: 'abc' }],
+    ['effect_reviews', {}],
+  ]) {
+    assert.equal((await call(name, args)).isError, true, `${name} ${JSON.stringify(args)}`);
+  }
+  assert.equal(seen.length, 2);
 });
 
 test('server kind enums match the plugin tables', async () => {

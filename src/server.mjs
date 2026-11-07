@@ -681,6 +681,25 @@ export function createServer(deps = {}) {
       run: community('rank_innovation_picks'),
     },
     {
+      name: 'effects_mine',
+      description:
+        '当前登录账号提交过的特效，最新的在前（与像塑移动版「作品」同一个接口）：effect_id、名称、审核状态 status 和 status_text（100 审核中、101 审核未通过、111 测试中、112 测试未通过、120 测试通过、103 已上线、104 已下线、113 延后上线、118 申诉重审中、119 申诉审核未通过）、提交和上线时间、绑定的任务 / 灵感 / 热点、能否编辑 / 删除 / 申诉及申诉类型、投稿量。101、112、119 的特效带 review：最近一条审核记录，text 是去掉标记的原因正文，refuse_reasons 是分条原因，links 是正文里的链接（如审核规则）。完整审核时间线用 effect_reviews。',
+      shape: {
+        ...target,
+        cursor: z.string().min(1).optional().describe('翻页游标，原样取上一页的 next_cursor。'),
+        // Picked, not measured: every failed effect on a page costs one or two more requests.
+        count: z.number().int().min(1).max(50).optional().describe('每页数量，默认 20（最大 50）。'),
+      },
+      run: community('effects_mine'),
+    },
+    {
+      name: 'effect_reviews',
+      description:
+        '一个自己的特效的审核记录，与像塑移动版「审核记录」页同一组接口：名称、当前状态、绑定的任务，reviews 为「上线审核」时间线（最新的在前，提交成功、审核中、审核未通过等，每条有时间、去掉标记的正文 text、分条原因 refuse_reasons、链接 links），innovation_reviews 为「精选审核」时间线（没有时为空）。',
+      shape: { ...target, effect_id: z.string().regex(/^\d+$/).describe('effects_mine 返回的 effect_id。') },
+      run: community('effect_reviews'),
+    },
+    {
       name: 'music_categories',
       description: '列出抖音音乐库的分类（像塑原创、推荐、抖音收藏、潮流心选等），返回 code 和名称。',
       shape: { ...target },
