@@ -89,7 +89,6 @@ const REQUIRED = {
   submit: [
     [M.events, 'BusinessEventManager.TypeGuard'],
     [M.ef, 'EventManager_deprecated.TypeGuard'],
-    [M.webWindow, 'EHWebWindow.prototype.showWindow'],
   ],
   mobile: [
     [M.mobilePreview, 'getCookie'],

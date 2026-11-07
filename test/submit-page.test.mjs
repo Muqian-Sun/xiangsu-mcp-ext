@@ -8,7 +8,7 @@ const { Library, M } = require('../editor-plugin/library.cjs');
 const { PAGE_TIMING } = require('../editor-plugin/features/delivery.cjs');
 const { BRIDGE_SCOPE, SOURCE_URL } = require('../editor-plugin/features/submitpage.cjs');
 
-Object.assign(PAGE_TIMING, { readyMs: 3000, quietMs: 100, pollMs: 20, settleMs: 30, stepMs: 500, checksMs: 1500 });
+Object.assign(PAGE_TIMING, { readyMs: 3000, quietMs: 100, pollMs: 20, settleMs: 30, stepMs: 500, checksMs: 1500, closeMs: 300 });
 
 class Bus {
   constructor() {
@@ -187,21 +187,28 @@ ${o.settingsStep ? `<div style="display: none;" data-step="1">${selector('insp',
   return { window, o };
 }
 
-// A fake editor whose SubmitEffect opens a window showing `page`, bridged the way the real webview and
-// JS bridge are: scripts go in through evaluateJavascript, answers come back as orionJSB:// queries.
-function editor(page, { windowName = 'DYEHEffectSubmissionWindow' } = {}) {
+// A fake editor whose SubmitEffect opens a new window showing `page` (added to App._windows, as the
+// editor's windows are), bridged the way the real webview and JS bridge are: scripts go in through
+// evaluateJavascript, answers come back as orionJSB:// queries.
+function editor(page, { windowName = 'DYEHEffectSubmissionWindow', left = [] } = {}) {
   const business = new Bus();
   const legacy = new Bus();
-  class EHWebWindow {}
-  const show = function () {
-    this.shown = true;
-  };
-  EHWebWindow.prototype.showWindow = show;
+  globalThis.App = { _windows: [{ constructor: { name: 'MainWindow' }, isClosed: false }, ...left] };
   const sources = [];
   const handlers = new Map();
-  const Win = { [windowName]: class extends EHWebWindow {} }[windowName];
+  const Win = {
+    [windowName]: class {
+      constructor() {
+        this.isClosed = false;
+      }
+      closeWindow() {
+        setTimeout(() => (this.isClosed = true), 5);
+      }
+    },
+  }[windowName];
   business.on('SubmitEffect', () => {
     const win = new Win();
+    globalThis.App._windows.push(win);
     win.JSB = { joinRegisterHandler: (scope, h) => handlers.set(scope, { ...handlers.get(scope), ...h }) };
     win.webview = {
       evaluateJavascript: (code, source) => {
@@ -214,27 +221,26 @@ function editor(page, { windowName = 'DYEHEffectSubmissionWindow' } = {}) {
       const m = /^orionJSB:\/\/([^/]+)\/([^?]+)\?(.*)$/.exec(request);
       if (page.o.answer) handlers.get(m[1])[m[2]](JSON.parse(decodeURIComponent(m[3])));
     };
-    win.showWindow();
     legacy.emit('OnSubmitWindowOpened', 1, 0);
   });
   const modules = {
     [M.events]: { BusinessEventManager: { TypeGuard: () => business } },
     [M.ef]: { EventManager_deprecated: { TypeGuard: () => legacy } },
-    [M.webWindow]: { EHWebWindow },
   };
   const lib = new Library((n) => {
     if (!(n in modules)) throw Error(`MODULE_NOT_FOUND: ${n}`);
     return modules[n];
   });
   lib.submitChecks = async () => ({ ok: true, issues: [] });
-  return { lib, sources, handlers, restored: () => EHWebWindow.prototype.showWindow === show };
+  const open = () => globalThis.App._windows.filter((w) => w.constructor.name === windowName && !w.isClosed);
+  return { lib, sources, handlers, open };
 }
 
 const fill = { name: '测试特效名', trigger_hint: '张嘴试试', camera: 'back', inspiration: '国风古风花钿妆', task: '征集最新自拍玩法' };
 
 test('submit_prepare fills every step, reads it back and stops on 提交审核 once the checks are done', async () => {
   const page = fakePage({ trickle: true, configAt: 120 });
-  const { lib, sources, handlers, restored } = editor(page);
+  const { lib, sources, handlers, open } = editor(page);
   const out = await lib.submitPrepare(fill);
   assert.equal(out.opened, true);
   assert.equal(out.step, '提交审核');
@@ -248,7 +254,8 @@ test('submit_prepare fills every step, reads it back and stops on 提交审核 o
   assert.match(out.next, /press 提交审核/);
   assert.ok(sources.length > 0 && sources.every((s) => s === SOURCE_URL));
   assert.ok(handlers.has(BRIDGE_SCOPE));
-  assert.ok(restored(), 'showWindow is put back');
+  assert.equal(out.closed_previous, 0);
+  assert.equal(open().length, 1, 'the filled window stays open');
   assert.ok(!page.window.document.querySelector('footer .button.next').classList.contains('disable'), 'left for the user to press');
 });
 
@@ -323,7 +330,18 @@ test('submit_prepare says what is left when the checks fail or the agreement is 
 test('submit_prepare fails loudly when the page or the window is not what it expects', async () => {
   await assert.rejects(editor(fakePage({ nextLabel: '继续' })).lib.submitPrepare(fill), /SUBMIT_PAGE_CHANGED: the 下一步 button not found/);
   await assert.rejects(editor(fakePage({ answer: false })).lib.submitPrepare(fill), /SUBMIT_PAGE_NOT_READY: .*last error SUBMIT_PAGE_NO_ANSWER: state/);
-  const other = editor(fakePage(), { windowName: 'SomeOtherWindow' });
-  await assert.rejects(other.lib.submitPrepare(fill), /SUBMIT_WINDOW_NOT_FOUND/);
-  assert.ok(other.restored());
+  await assert.rejects(editor(fakePage(), { windowName: 'SomeOtherWindow' }).lib.submitPrepare(fill), /SUBMIT_WINDOW_NOT_FOUND/);
+});
+
+test('submit_prepare closes a submit window left open before opening a fresh one', async () => {
+  const old = { constructor: { name: 'DYEHEffectSubmissionWindow' }, isClosed: false, closeWindow() { setTimeout(() => (this.isClosed = true), 5); } };
+  const { lib, open } = editor(fakePage(), { left: [old] });
+  const out = await lib.submitPrepare({ name: '再提交一次' });
+  assert.equal(out.closed_previous, 1);
+  assert.equal(old.isClosed, true);
+  assert.equal(open().length, 1, 'one submit window, the new one');
+  const stuck = { constructor: { name: 'DYEHEffectSubmissionWindow' }, isClosed: false, closeWindow() {} };
+  const blocked = editor(fakePage(), { left: [stuck] });
+  await assert.rejects(blocked.lib.submitPrepare({ name: '再提交一次' }), /WINDOW_NOT_CLOSED: 1 DYEHEffectSubmissionWindow/);
+  assert.equal(blocked.open().length, 1, 'no second window while the old one is open');
 });
