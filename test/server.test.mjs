@@ -54,6 +54,7 @@ const OWN = [
   'task_detail',
   'task_receive',
   'tasks_list',
+  'works_by_effect',
   'works_cleanup',
   'works_download',
   'works_list',

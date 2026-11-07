@@ -14,7 +14,7 @@ test('library methods dispatch through the METHODS table and dev methods stay of
   assert.equal(typeof rt.resolve('library_apply'), 'function');
   assert.equal(rt.resolve('library_covers'), null);
   assert.equal(typeof rt.resolve('self_check'), 'function');
-  for (const m of ['menu_preview', 'object_remove', 'resource_delete_unused', 'project_launch', 'project_close', 'project_state']) assert.equal(typeof rt.resolve(m), 'function', m);
+  for (const m of ['menu_preview', 'object_remove', 'resource_delete_unused', 'project_launch', 'project_close', 'project_state', 'works_by_effect']) assert.equal(typeof rt.resolve(m), 'function', m);
   assert.equal(rt.resolve('eval'), null);
   assert.equal(rt.resolve('constructor'), null);
   assert.equal(rt.resolve('nope'), null);

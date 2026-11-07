@@ -106,7 +106,7 @@ export function createServer(deps = {}) {
   // windows open and close while an agent works, and a later apply or download may be served by a
   // different one. The plugin returns raw records next to the slim items; clients only see the slim ones.
   const seenLib = new Seen('UNKNOWN_TEMPLATE', 'library_list or library_search');
-  const seenWorks = new Seen('UNKNOWN_WORK', 'works_list or works_search');
+  const seenWorks = new Seen('UNKNOWN_WORK', 'works_list, works_search or works_by_effect');
   const seenTasks = new Seen('UNKNOWN_TASK', 'tasks_list', 'task_id');
   const seenMusic = new Seen('UNKNOWN_MUSIC', 'music_list', 'music_id');
 
@@ -289,13 +289,33 @@ export function createServer(deps = {}) {
     },
     {
       name: 'works_search',
-      description: '按作品名搜索首页作品（与首页搜索框同一个接口，限定在一个分类内，默认推荐）。返回字段同 works_list。',
+      description: '按作品名搜索首页作品（与首页搜索框同一个接口，限定在一个分类内，默认推荐）。返回字段同 works_list。按特效 ID 查用 works_by_effect。',
       shape: { ...target, query: z.string().min(1).describe('作品名关键词，如「合掌」「转场」「换装」。'), ...workPage },
       run: works('works_search'),
     },
     {
+      name: 'works_by_effect',
+      description:
+        '按特效 ID 查排行榜等处给出的特效（rank_list / rank_subjects / rank_innovation_picks 的 effect_id）在首页有没有工程，与首页搜索框「特效ID」搜索同一个接口。逐个返回 status：found 首页有这个特效的工程；same_name 首页没有它、只有同名作品（effect_id 不同，可能是别人的同名作品，不能当成同一个特效）；not_on_homepage 作者没把工程分享到首页，拿不到工程。found 和 same_name 的作品在 items 里（字段同 works_list），template_id 可直接用于 works_preview / works_download / works_open。每个特效一到两次请求，20 个约 10 秒。',
+      shape: {
+        ...target,
+        effects: z
+          .array(
+            z.object({
+              effect_id: z.string().regex(/^\d+$/).describe('特效 ID，如 rank_list 返回的 effect_id。'),
+              name: z.string().min(1).optional().describe('特效名；给了才会在查不到 ID 时找同名作品。'),
+            }),
+          )
+          .min(1)
+          .max(20)
+          .describe('要查的特效，最多 20 个（一页排行榜）。'),
+        category_id: workPage.category_id,
+      },
+      run: works('works_by_effect'),
+    },
+    {
       name: 'works_preview',
-      description: '查看首页作品的封面（animated=true 时看动图），一次最多 8 个，template_id 须来自本会话的 works_list / works_search。',
+      description: '查看首页作品的封面（animated=true 时看动图），一次最多 8 个，template_id 须来自本会话的 works_list / works_search / works_by_effect。',
       shape: {
         template_ids: z.array(z.string()).min(1).max(8).describe('要看的作品 template_id。'),
         animated: z.boolean().optional().describe('看动图（gif）而不是静态封面，默认 false；动图较大。'),
@@ -317,7 +337,7 @@ export function createServer(deps = {}) {
         '下载一个首页作品的完整工程并解压（与在首页点开作品同一流程，但不打开窗口），返回工程目录和文件清单（files 列出相对路径和大小，可直接读取 effect.dyehpj、Assets 下的场景、Graph 下的脚本等来学习做法）。dest 给定时把工程放到该目录（须不存在或为空，跳过 Library 缓存），像塑临时目录里的那份随即删除。下载的工程（含 dest）都会登记，expires_at（24 小时）后在下次下载时自动删除；学完请立即调用 works_cleanup。要在编辑器里看效果用 works_open。作品版权归原作者，只用于学习参考，不要复制进自己的工程或仓库。',
       shape: {
         ...target,
-        template_id: z.string().describe('works_list / works_search 返回的 template_id。'),
+        template_id: z.string().describe('works_list / works_search / works_by_effect 返回的 template_id。'),
         dest: z.string().optional().describe('工程要放到的文件夹绝对路径（须不存在或为空）；省略时留在像塑的临时目录。'),
       },
       run: async (a) => {
@@ -340,7 +360,7 @@ export function createServer(deps = {}) {
       name: 'works_open',
       description:
         '下载一个首页作品并在新的编辑器窗口里打开，与在首页点开作品同一流程（不弹版本升级提示，工程处于未保存状态）。返回窗口 pid、官方 instance_id 和工程目录，之后可用 get_scene、capture_preview 等官方工具观察它的做法。看完用 project_close（discard_changes=true）关窗，再 works_cleanup 删除下载；窗口开着时工程不会被删除。',
-      shape: { ...target, template_id: z.string().describe('works_list / works_search 返回的 template_id。') },
+      shape: { ...target, template_id: z.string().describe('works_list / works_search / works_by_effect 返回的 template_id。') },
       run: async (a) => {
         const got = await downloadWork(a);
         try {
@@ -551,7 +571,7 @@ export function createServer(deps = {}) {
     },
     {
       name: 'rank_list',
-      description: '分页读取一个排行榜（与像塑移动版排行榜页同一个接口）：名次、特效名、effect_id、等级、投稿量（峰值 / 累计）、跟拍量、男女比例、年轻喜爱度、热玩分、总收益等。可按日期、分类（每级一个，如只看「人像美化 › 美妆」）和筛选项过滤，选项见 rank_nav。',
+      description: '分页读取一个排行榜（与像塑移动版排行榜页同一个接口）：名次、特效名、effect_id、等级、投稿量（峰值 / 累计）、跟拍量、男女比例、年轻喜爱度、热玩分、总收益等。可按日期、分类（每级一个，如只看「人像美化 › 美妆」）和筛选项过滤，选项见 rank_nav。要看某个特效的工程，把 effect_id 和 name 交给 works_by_effect，查它在不在首页。',
       shape: {
         ...target,
         rank_type: z.number().int().optional().describe('rank_nav 返回的 rank_type，默认 1（年轻喜爱榜）。'),

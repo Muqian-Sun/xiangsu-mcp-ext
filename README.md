@@ -38,6 +38,7 @@
 | `library_preview` | 一次最多 8 个素材的封面图 |
 | `library_apply` | 下载素材包、校验 MD5、导入并放进场景（可撤销）；返回新增对象和素材包文件夹 |
 | `works_nav` / `works_list` / `works_search` | 首页作品分类（推荐、官方工程、新手必做、游戏、妆容、AI玩法…）、分页列表（可按推荐 / 最新 / 使用量排序）、按作品名搜索 |
+| `works_by_effect` | 按特效 ID 查排行榜等处的特效在首页有没有工程（一次最多 20 个），逐个返回 `found` / `same_name` / `not_on_homepage` |
 | `works_preview` | 一次最多 8 个作品的封面，`animated=true` 看动图 |
 | `works_download` | 下载并解压完整工程（与首页点开作品同一流程，但不开窗口），返回工程目录和文件清单；`dest` 给定时把工程放到该目录 |
 | `works_open` | 下载并在新窗口里按首页的方式打开（不弹版本升级提示，工程处于未保存状态），返回 pid 和 instance_id |
@@ -73,14 +74,16 @@
 - 在编辑器里看别人的效果：`works_open` → `get_scene` / `capture_preview` → `project_close`（`discard_changes=true`）→ `works_cleanup`。
 - 交付：`icon_set` → `effect_check`（可加 `cloud=true`）→ `mobile_preview` 真机看 → `save_project` → `submit_prepare`，在提交窗口里填名称并确认发布。要参加任务的，`tasks_list` → `task_receive` → 再 `tasks_list` → `task_bind`。
 - 找选题：`rank_nav` → `rank_list`（如 `rank_type=1` 年轻喜爱榜、`categories=["人像美化","美妆"]`、`levels=["S","A+"]`）看什么在火；`rank_subjects`（`keyword="测一测"` 或 `kind="template"`）看各期主题榜；`rank_hotspots` → 带 `topic_id` 看热点灵感 → `inspiration_preview` / `inspiration_detail`；`tasks_list` → `task_detail` 看征集要求和奖项。
+- 看榜上特效的工程：`rank_list` → 把这页的 `effect_id` 和 `name` 交给 `works_by_effect` → `status=found` 的用返回的 `template_id` 走 `works_download` / `works_open`。
 
 几点约定：
 
-- `library_apply` 只接受同一工程窗口里 `library_list` / `library_search` 返回过的 `template_id`（窗口重开或扩展代码更新后需重新搜索）；`works_preview` / `works_download` / `works_open` 只接受本会话里 `works_list` / `works_search` 返回过的作品（记录在 MCP 服务里，不受工程窗口开关影响，重启服务后需重新搜索）。
+- `library_apply` 只接受同一工程窗口里 `library_list` / `library_search` 返回过的 `template_id`（窗口重开或扩展代码更新后需重新搜索）；`works_preview` / `works_download` / `works_open` 只接受本会话里 `works_list` / `works_search` / `works_by_effect` 返回过的作品（记录在 MCP 服务里，不受工程窗口开关影响，重启服务后需重新搜索）。
 - 像塑最多同时开 2 个工程窗口（编辑器的 `CHILD_PROCESS_LIMIT`）。都占满时 `project_open` / `project_new` / `works_open` 直接返回 `WINDOW_LIMIT`，先 `project_close` 一个；不检查的话首页只会弹警告，窗口永远不来。
 - `works_*`、`inspiration_*`、`task_*`、`rank_*` 与当前工程无关，任意一个工程窗口开着即可；不指定工程时由 pid 最小的窗口处理。
 - 灵感、任务、排行榜按编辑器首页活动中心的方式请求（编辑器的登录 Cookie 和签名请求头），读写的都是编辑器里登录的账号。排行榜用的是像塑移动版的接口，榜单名和筛选项取值与移动版一致，后端改版时可能失效。
 - 几处上限是在服务端实测的：`rank_list` 和 `rank_subjects` 每页最多 20、`inspiration_list` 每页最多 50（100 会报错）、专题榜详情一次最多 20。移动版的「特效优秀视频榜」接口对所有榜单都返回空，没有提供。
+- 只有作者分享到首页的特效才有工程可下载。排行榜的 `effect_id` 和首页作品的 `effect_id` 是同一套编号，`works_by_effect` 按 ID 精确匹配（与首页搜索框的「特效ID」搜索同一个接口，默认在「推荐」里查，首页在「官方工程」里不提供按 ID 搜）。每个特效要一到两次请求（查不到 ID 且给了名字时再按名字搜一次），实测查一页 20 个用了约 10 秒。结果分三种：`found` 首页有这个特效的工程；`same_name` 首页没有它，只有同名作品，`effect_id` 不同，可能是别人的作品，不能当成同一个特效；`not_on_homepage` 作者没公开工程，没有正规途径能拿到（编辑器「我的特效」里的工程下载只对自己的特效开放）。2026-11-07 实测年轻喜爱榜第一页 20 个特效：10 个 `found`，1 个 `same_name`，9 个 `not_on_homepage`。
 - `inspiration_preview` 只接受本会话里 `inspiration_list` / `inspiration_detail` / `rank_hotspots`（带 `topic_id`）/ `task_detail` 返回过的灵感。
 - `works_download` / `works_open` 走编辑器自己的下载流程，每次解压一份新的到像塑实例目录的 `ProjectCreatedTmp/CreatedFromTemplate/<guid>/` 下。`dest` 副本不含 `Library/` 缓存（编辑器打开时会重建）。
 - 下载物不留痕：
@@ -161,6 +164,6 @@ node scripts/install.mjs   # 装到 ~/Library/Application Support/DouyinAR/Plugi
 
 ## English
 
-Unofficial MCP extension for Douyin AR (像塑) on macOS. One stdio MCP server proxies every tool of the editor's official MCP (with automatic reconnects) and adds what the official server cannot do: browse/search/preview/apply official library assets, browse/search/download or open the homepage works (official projects and published effects) as full projects an agent can read and learn from (every download is registered and deleted by works_cleanup or after 24 hours), add any item of the editor's "add object" menu (toolbar makeup / reshape / AI face effects), set FaceWarpX brush intensity, prepare delivery (icon, local and cloud effect checks, opening the submit window — publishing stays a user click — phone preview QR codes, binding received creator tasks or inspirations), read the signed-in account's inspirations and tasks (collect inspirations, receive tasks) and the mobile app's rank boards, use Douyin music, open/create/close project windows, and remove objects together with resources only they used. It works through a small editor plugin that exposes a token-protected RPC on 127.0.0.1 inside each project window. Relies on editor internals (verified on 9.7.2); `ext_status` reports any missing internals. Install with `npm ci && node scripts/install.mjs`, then register `node src/server.mjs` as a stdio MCP server.
+Unofficial MCP extension for Douyin AR (像塑) on macOS. One stdio MCP server proxies every tool of the editor's official MCP (with automatic reconnects) and adds what the official server cannot do: browse/search/preview/apply official library assets, browse/search/download or open the homepage works (official projects and published effects) as full projects an agent can read and learn from (rank-board effects are looked up there by effect id, though effects whose authors did not share them on the homepage have no downloadable project; every download is registered and deleted by works_cleanup or after 24 hours), add any item of the editor's "add object" menu (toolbar makeup / reshape / AI face effects), set FaceWarpX brush intensity, prepare delivery (icon, local and cloud effect checks, opening the submit window — publishing stays a user click — phone preview QR codes, binding received creator tasks or inspirations), read the signed-in account's inspirations and tasks (collect inspirations, receive tasks) and the mobile app's rank boards, use Douyin music, open/create/close project windows, and remove objects together with resources only they used. It works through a small editor plugin that exposes a token-protected RPC on 127.0.0.1 inside each project window. Relies on editor internals (verified on 9.7.2); `ext_status` reports any missing internals. Install with `npm ci && node scripts/install.mjs`, then register `node src/server.mjs` as a stdio MCP server.
 
 Licensed under [MIT](LICENSE). Not affiliated with or endorsed by ByteDance / Douyin; all product names and trademarks belong to their owners. The repository contains no editor code or assets. Official assets and homepage works accessed through this tool belong to 像塑 or their creators and are subject to the platform's terms; use downloaded works for learning only, delete them with works_cleanup when done, and do not redistribute them.
