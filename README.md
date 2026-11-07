@@ -25,7 +25,7 @@
 | 编辑器插件 `XiangsuMcpExt` | `editor-plugin/` | 像塑用户插件。每个工程窗口里开一个只监听 `127.0.0.1`、带随机令牌的 RPC 服务，调用编辑器自身的模块 |
 | MCP 服务 | `src/server.mjs` | stdio MCP。转发官方 MCP（`http://127.0.0.1:17320/mcp`），并把插件能力包装成工具 |
 
-插件把 `{pid, port, token}` 写到 `~/.xiangsu-mcp-ext/instances/<pid>.json`（权限 600），日志在 `~/.xiangsu-mcp-ext/logs/plugin.log`，导入记录在 `~/.xiangsu-mcp-ext/imports/`。
+插件把 `{pid, port, token, startedAt}` 写到 `~/.xiangsu-mcp-ext/instances/<pid>.json`（权限 600）。窗口崩溃或被强退时这份记录会留下来，所以只有该 pid 的进程还在、并且启动时间不晚于 `startedAt` 时才算开着的窗口；pid 被后来的进程复用时不算。日志在 `~/.xiangsu-mcp-ext/logs/plugin.log`，导入记录在 `~/.xiangsu-mcp-ext/imports/`。
 
 ## 工具
 
