@@ -5,7 +5,9 @@ const path = require('path');
 const { M, editingScene, sceneObjectSet, addedObjectEditors, sceneObjectPath, projectResources, packageRootsAdded, recordImport } = require('./common.cjs');
 
 // Cloud AI generation / chat entries: they consume account quota or need user uploads, so they are not exposed.
+// AICombine alone adds an AI 组合效果 with an empty workflow; the ai_combine feature builds a working one.
 const MENU_DENY = new Set(['AIDraw', 'AIVideo', 'AIImageCaption', 'Audio_AIMusic', 'AICombine', 'AIChat', 'AIObjectLens']);
+const MENU_DENY_HINT = { AICombine: 'use ai_combine_new and ai_combine_apply' };
 const MAX_MENU_PREVIEW = 8;
 
 const methods = {
@@ -55,7 +57,10 @@ const methods = {
 
   menuEntry(menu_id) {
     if (typeof menu_id !== 'string' || !menu_id) throw Error('INVALID_MENU_ID: menu_id must be a non-empty string');
-    if (MENU_DENY.has(menu_id)) throw Error(`MENU_ITEM_NOT_ALLOWED: ${menu_id} is a cloud AI generation entry`);
+    if (MENU_DENY.has(menu_id)) {
+      const hint = MENU_DENY_HINT[menu_id];
+      throw Error(`MENU_ITEM_NOT_ALLOWED: ${menu_id} is a cloud AI generation entry${hint ? `; ${hint}` : ''}`);
+    }
     const entry = this.menuEntries().find((e) => e.menu_id === menu_id);
     if (!entry) throw Error(`UNKNOWN_MENU_ID: ${menu_id}; call menu_list to find ids`);
     return entry;

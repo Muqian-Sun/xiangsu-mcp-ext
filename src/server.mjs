@@ -916,7 +916,7 @@ export function createServer(deps = {}) {
     {
       name: 'menu_list',
       description:
-        '列出像塑「添加对象」菜单里的全部官方功能项（工具栏美妆、美型、AI 实时变脸，及人脸/身体/2D/3D/AI 玩法/互动/宠物/音乐等），返回 menu_id、中文名、路径、类型。官方 add_builtin_object 只覆盖其中一部分；美容（面部提拉、祛皱纹）、面部生成（烟熏妆、卡通脸）、表情生成（香肠嘴、呲牙尬笑）、性别年龄、五官处理、身体换装等用 menu_add。query 按名称、路径或 menu_id 过滤。云端 AI 生成项不在列表中。',
+        '列出像塑「添加对象」菜单里的全部官方功能项（工具栏美妆、美型、AI 实时变脸，及人脸/身体/2D/3D/AI 玩法/互动/宠物/音乐等），返回 menu_id、中文名、路径、类型。官方 add_builtin_object 只覆盖其中一部分；美容（面部提拉、祛皱纹）、面部生成（烟熏妆、卡通脸）、表情生成（香肠嘴、呲牙尬笑）、性别年龄、五官处理、身体换装等用 menu_add。query 按名称、路径或 menu_id 过滤。云端 AI 生成项不在列表中；拍照后云端生图的「AI 组合效果」用 ai_combine_new / ai_combine_apply。',
       shape: { ...target, query: z.string().optional().describe('按中文名、路径或 menu_id 过滤，如「表情」「美容」「烟熏妆」。') },
       run: plugin('menu_list'),
     },
@@ -932,6 +932,20 @@ export function createServer(deps = {}) {
       description: '按 menu_id 往场景添加一个官方功能对象，与在编辑器菜单里点选等效（可撤销）。kind=package 的项会先下载官方素材包再导入。返回 added_objects（新对象名和 object_path）。',
       shape: { ...target, menu_id: z.string().min(1).describe('menu_list 返回的 menu_id。') },
       run: plugin('menu_add', 180000),
+    },
+    {
+      name: 'ai_combine_new',
+      description:
+        '新建一张「AI 组合效果」工作流（用户拍照后在云端按工作流出图或出视频），等同 AI 效果窗口的「新建工作流」：在本地建 AI Graph，只有「输入图」和「效果组合」两个节点且未连线；不联网、不扣额度、不建云端草稿。返回 ai_graph_id 和各节点的 node_id，交给官方 get_workflow_context / get_workflow_capabilities / apply_workflow_patch 添加生图节点、写 prompt、连线（官方 apply_workflow_patch 每次改完会把工作流保存成账号下的云端 AI 效果草稿），要看效果用官方 generate_workflow（扣额度）。改好后用 ai_combine_apply 放进场景。「添加对象」菜单里的 AI 组合效果只建空壳，不要用 menu_add。',
+      shape: { ...target },
+      run: plugin('ai_combine_new'),
+    },
+    {
+      name: 'ai_combine_apply',
+      description:
+        '把一张 AI 工作流放进场景，等同 AI 效果窗口的「应用」（可撤销）：编辑器编译工作流、把工作流文件上传到特效平台，再添加「AI 组合效果」对象（场景里没有 2D 前景时一并建「2D 前景」「2D 摄像机」）。不扣额度，不新建草稿；工作流生成过预览视频时一并上传供审核。效果组合节点没有输入连线等情况下编辑器会拒绝，返回 AI_COMBINE_APPLY_FAILED 和编辑器的提示原文（如「请先连接效果组合器」）。返回 added_objects（新对象名和 object_path）和 draft_id（工作流已存成云端草稿时才有，否则为 null）。之后 save_project。',
+      shape: { ...target, graph_id: z.string().min(1).describe('ai_combine_new 或官方 get_workflow_context 返回的 ai_graph_id。') },
+      run: plugin('ai_combine_apply', 180000),
     },
     {
       name: 'face_warp_list',

@@ -3,7 +3,7 @@
   "version": "0.5.0",
   "private": true,
   "type": "module",
-  "description": "MCP extension for Douyin AR (像塑): proxies the official MCP and adds official asset library, homepage works, delivery (icon, effect checks, submit window, phone preview), inspirations, tasks and rank boards, review status and rejection reasons of the account's effects, Douyin music, add-object menu, FaceWarpX intensity, project windows and clean removal",
+  "description": "MCP extension for Douyin AR (像塑): proxies the official MCP and adds official asset library, homepage works, delivery (icon, effect checks, submit window, phone preview), inspirations, tasks and rank boards, review status and rejection reasons of the account's effects, Douyin music, add-object menu, AI combine workflows, FaceWarpX intensity, project windows and clean removal",
   "keywords": [
     "mcp",
     "model-context-protocol",

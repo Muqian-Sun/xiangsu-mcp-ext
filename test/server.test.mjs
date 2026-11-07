@@ -11,6 +11,8 @@ import { createServer } from '../src/server.mjs';
 import { fetchImage, readImageFile } from '../src/images.mjs';
 
 const OWN = [
+  'ai_combine_apply',
+  'ai_combine_new',
   'effect_check',
   'effect_reviews',
   'effects_mine',
@@ -141,9 +143,11 @@ test('own tools route to the plugin window by project_path or official instance_
   assert.deepEqual(seen[1], { method: 'library_apply', params: { item: { templateId: '111', title: '芒果脸' } }, opts: { projectPath: '/proj/B', timeoutMs: 180000 } });
   await client.callTool({ name: 'face_warp_set_intensity', arguments: { instance_id: '1', object_path: 'a/塑型画笔', intensity: 55 } });
   assert.deepEqual(seen[2], { method: 'face_warp_set_intensity', params: { object_path: 'a/塑型画笔', intensity: 55 }, opts: { projectPath: '/proj/A', timeoutMs: undefined } });
+  await client.callTool({ name: 'ai_combine_apply', arguments: { instance_id: '1', graph_id: 'g-1' } });
+  assert.deepEqual(seen[3], { method: 'ai_combine_apply', params: { graph_id: 'g-1' }, opts: { projectPath: '/proj/A', timeoutMs: 180000 } });
   const unknown = await client.callTool({ name: 'menu_list', arguments: { instance_id: '7' } });
   assert.match(unknown.content[0].text, /UNKNOWN_INSTANCE: 7/);
-  assert.equal(seen.length, 3);
+  assert.equal(seen.length, 4);
 });
 
 test('invalid arguments are rejected before reaching the plugin', async () => {

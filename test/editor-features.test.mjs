@@ -234,7 +234,8 @@ test('menu_add reports the new top-level objects for builtin and package entries
 
 test('menu_add refuses denied, unknown and no-op entries', async () => {
   const { lib, calls, dyn } = setup();
-  await assert.rejects(lib.menuAdd({ menu_id: 'AIDraw' }), /MENU_ITEM_NOT_ALLOWED/);
+  await assert.rejects(lib.menuAdd({ menu_id: 'AIDraw' }), /MENU_ITEM_NOT_ALLOWED: AIDraw is a cloud AI generation entry$/);
+  await assert.rejects(lib.menuAdd({ menu_id: 'AICombine' }), /MENU_ITEM_NOT_ALLOWED: AICombine .*; use ai_combine_new and ai_combine_apply/);
   await assert.rejects(lib.menuAdd({ menu_id: 'nope' }), /UNKNOWN_MENU_ID: nope/);
   await assert.rejects(lib.menuAdd({ menu_id: 'Broken' }), /MENU_ADD_NO_EFFECT: Broken/);
   dyn.downloadTaskMap.clear();

@@ -139,6 +139,15 @@ const REQUIRED = {
     [M.orionui, 'WindowState.Minimized'],
     [M.editWindow, 'EditWindowController.getInstance'],
   ],
+  aiCombine: [
+    [M.aiGraphProject, 'createAIGraph'],
+    [M.aiGraphManager, 'AIGraphManager.getInstance'],
+    [M.aiGraphManager, 'AIGraphManager.prototype.addGraph'],
+    [M.aiGraphManager, 'AIGraphManager.prototype.getGraphById'],
+    [M.aiGraphManager, 'AIGraphManager.prototype.switchGraphbyGuid'],
+    [M.aiGraphManager, 'AIGraphManager.prototype.editorPanelApply'],
+    [M.events, 'BusinessEventManager.TypeGuard'],
+  ],
 };
 
 // Plain asset lists, 素材广场 and 收藏 can be applied; AI generation panels (妆容/图片/视频/实时变脸 UGC)
