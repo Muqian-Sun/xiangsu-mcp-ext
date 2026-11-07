@@ -2,18 +2,32 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { execFileSync } from 'node:child_process';
 
 const INSTANCE_DIR = path.join(process.env.XIANGSU_MCP_EXT_STATE || path.join(os.homedir(), '.xiangsu-mcp-ext'), 'instances');
 
-function alive(pid) {
+// Start time (ms, truncated to the second) of each running pid; pids with no process are absent.
+function startTimes(pids) {
+  let out;
   try {
-    process.kill(pid, 0);
-    return true;
-  } catch {
-    return false;
+    out = execFileSync('ps', ['-o', 'pid=,lstart=', '-p', pids.join(',')], { encoding: 'utf8', env: { ...process.env, LC_ALL: 'C' } });
+  } catch (e) {
+    if (e.status === 1 && !String(e.stdout).trim()) return new Map();
+    throw e;
   }
+  const times = new Map();
+  for (const line of out.split('\n')) {
+    const m = line.match(/^\s*(\d+)\s+(.+?)\s*$/);
+    if (!m) continue;
+    const t = Date.parse(m[2]);
+    if (Number.isNaN(t)) throw Error(`PS_LSTART_UNPARSED: ${line}`);
+    times.set(Number(m[1]), t);
+  }
+  return times;
 }
 
+// A record left by a window that exited without cleaning up must not match whatever process reuses
+// its pid later, so the process has to have started no later than the plugin wrote the record.
 export function listInstances() {
   let names;
   try {
@@ -22,10 +36,10 @@ export function listInstances() {
     if (e.code === 'ENOENT') return [];
     throw e;
   }
-  return names
-    .filter((n) => /^\d+\.json$/.test(n))
-    .map((n) => JSON.parse(fs.readFileSync(path.join(INSTANCE_DIR, n), 'utf8')))
-    .filter((s) => alive(s.pid));
+  const records = names.filter((n) => /^\d+\.json$/.test(n)).map((n) => JSON.parse(fs.readFileSync(path.join(INSTANCE_DIR, n), 'utf8')));
+  if (!records.length) return [];
+  const started = startTimes(records.map((s) => s.pid));
+  return records.filter((s) => started.has(s.pid) && started.get(s.pid) <= s.startedAt);
 }
 
 async function post(instance, method, params, timeoutMs) {
