@@ -193,6 +193,14 @@ export function createServer(deps = {}) {
     return { ...got, root };
   };
   const expiresAt = () => new Date(Date.now() + DOWNLOAD_TTL_MS).toISOString();
+  const setIcon = async (projectPath, image_path, type = 'both') => {
+    const { png, dir } = await d.prepareIcon(image_path);
+    try {
+      return await d.callPlugin('icon_set', { png_path: png, types: type === 'both' ? ['female', 'male'] : [type] }, { projectPath });
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  };
   // Inspirations, tasks and rank boards belong to the account rather than a project, so any window
   // serves them.
   const community = (method) => async (args) => {
@@ -431,21 +439,16 @@ export function createServer(deps = {}) {
     {
       name: 'icon_set',
       description:
-        '设置特效图标（提交特效必需）：把一张图片居中裁成正方形、缩放到 360×360 PNG，写进工程的 Icon/ 目录（与「图标制作」窗口保存的同一批文件），并让编辑器重新读取。默认女性、男性两个图标位都用这张图（提交窗口要这两个）。图片可以来自 generate_image 生成的资源，或 capture_preview 截图另存的文件。之后 save_project 落盘。',
+        '设置特效图标（提交特效必需）：把一张图片居中裁成正方形、缩放到 360×360 PNG，写进工程的 Icon/ 目录（与「图标制作」窗口保存的同一批文件），并和那个窗口的「完成」按钮一样把图标上传到抖音特效平台（提交窗口只认上传过的图标）。默认女性、男性两个图标位都用这张图（提交窗口要这两个）。上传失败报 ICON_UPLOAD_FAILED，重试即可。图片可以来自 generate_image 生成的资源，或 capture_preview 截图另存的文件。之后 save_project 落盘。',
       shape: {
         ...target,
         image_path: z.string().min(1).describe('图片的绝对路径（png / jpg / webp 等 sips 能读的格式）。'),
         type: z.enum(['both', 'female', 'male', 'common']).optional().describe('写哪个图标位：both（默认，女性和男性两个位都用这张图，提交窗口要的就是这两个）、female、male，或 common 通用。'),
       },
       run: async (a) => {
-        const { project_path, instance_id, image_path, type = 'both' } = a;
+        const { project_path, instance_id, image_path, type } = a;
         const projectPath = await projects.resolveProjectPath({ project_path, instance_id });
-        const { png, dir } = await d.prepareIcon(image_path);
-        try {
-          return text(await d.callPlugin('icon_set', { png_path: png, types: type === 'both' ? ['female', 'male'] : [type] }, { projectPath }));
-        } finally {
-          fs.rmSync(dir, { recursive: true, force: true });
-        }
+        return text(await setIcon(projectPath, image_path, type));
       },
     },
     {

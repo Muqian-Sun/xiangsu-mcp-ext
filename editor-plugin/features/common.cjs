@@ -37,6 +37,7 @@ const M = {
   worksDownload: '@orion/Business/HomeWindow/TemplatesPanel/Model/DownloadTemplateModel',
   iconPreview: '@orion/Business/IconCreationNew/controller/IconPreviewManager',
   iconWindow: '@orion/Business/IconCreationNew/IconCreationWindow',
+  iconUpload: '@orion/Business/IconCreationNew/UI/BottomPanel/DYEHIconUploadHelper',
   submission: '@orion/Business/Submission/SubmissionExtension/EffectSubmissionExtension',
   perfTest: '@orion/Business/PerfTest/PerfTestExtension',
   events: '@orion/Business/Event/BusinessEventManager',

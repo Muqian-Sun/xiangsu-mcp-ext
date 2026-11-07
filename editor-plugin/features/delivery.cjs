@@ -28,9 +28,10 @@ function projectIcons(lib, project) {
 
 const methods = {
   // `png_path` is a square PNG prepared by the MCP server; it becomes the project's icon for each of
-  // `types`, the same files the icon creation window saves, and the editor's icon state is reloaded.
-  // The submit window asks for the female and male icons, hence the default.
-  iconSet({ types = ['female', 'male'], png_path }) {
+  // `types`, the same files the icon creation window saves, and is uploaded the way that window's 完成
+  // button does: the submit page only accepts icons the platform already has. The submit window asks
+  // for the female and male icons, hence the default.
+  async iconSet({ types = ['female', 'male'], png_path }) {
     this.ensureCompatible('icon');
     const bad = (Array.isArray(types) && types.length ? types : [null]).filter((t) => !Object.prototype.hasOwnProperty.call(ICON_TYPES, t));
     if (bad.length) throw Error(`INVALID_ICON_TYPE: ${bad.join(', ')}; valid: ${Object.keys(ICON_TYPES).join(', ')}`);
@@ -58,10 +59,14 @@ const methods = {
       fs.copyFileSync(png_path, dest);
       icons.importAndCreateIcon(t, project.path);
       icons.setIconExistState(t, true);
+      // The uri of an earlier upload names the old image; kept after a failed upload, it would be submitted.
+      icons.updateIcon(t, { iconUri: undefined, uploadData: undefined });
       written.push(dest);
     }
+    const uploaded = await this.mod(M.iconUpload).default.uploadIcon();
     icons.saveIconJson();
-    return { types, icon_paths: written, removed, project_icons: projectIcons(this, project) };
+    if (!uploaded) throw Error('ICON_UPLOAD_FAILED: the icon files are written but the platform did not take the upload (network or login); call icon_set again');
+    return { types, icon_paths: written, removed, uploaded, project_icons: projectIcons(this, project) };
   },
 
   iconOpen() {

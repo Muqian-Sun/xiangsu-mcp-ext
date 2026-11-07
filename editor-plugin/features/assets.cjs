@@ -73,6 +73,8 @@ const REQUIRED = {
     [M.iconPreview, 'IconPreviewManager.prototype.isIconCreated'],
     [M.iconPreview, 'IconPreviewManager.prototype.deleteIcon'],
     [M.iconPreview, 'IconPreviewManager.prototype.uploadDeleteIcon'],
+    [M.iconPreview, 'IconPreviewManager.prototype.updateIcon'],
+    [M.iconUpload, 'default.uploadIcon'],
     [M.iconWindow, 'showIconCreationWindow'],
   ],
   check: [
