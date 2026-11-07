@@ -40,20 +40,19 @@ const methods = {
       if (!activity || !activity.activity_id || Object.keys(activity).some((k) => !keys.includes(k))) throw Error(`INVALID_ACTIVITY: expected ${keys.join(', ')} with an activity_id`);
       Object.assign(extra, activity, { enter_method: 'activity' });
     }
-    const { OpenProjectFromHomeCommand, GetProjectProcessStatusCommand } = this.mod(M.ipc);
-    const sender = this.mod(M.sender).EditSender.getInstance();
-    // The home process caps project windows; at the cap it only shows a warning dialog and never opens,
-    // so refuse up front instead of letting the caller wait for a window that will not come.
-    const { CHILD_PROCESS_LIMIT, ChildProcessStatus } = this.mod(M.multiProcess);
-    const processes = new Map(await sender.sendCmdWithResponse(new GetProjectProcessStatusCommand()));
-    const used = [...processes.values()].filter((p) => p.process === ChildProcessStatus.Used).length;
-    if (used >= CHILD_PROCESS_LIMIT) {
-      throw Error(`WINDOW_LIMIT: 像塑 allows ${CHILD_PROCESS_LIMIT} project windows and all are in use; close one with project_close first`);
-    }
-    const res = await sender.sendCmdWithResponse(
-      new OpenProjectFromHomeCommand(operation, withPath ? projectPath : undefined, extra),
-    );
-    return { requested: operation, path: withPath ? projectPath : null, response: res === undefined ? null : res };
+    // The same request the editor's own launchProject sends; the home process answers once the new
+    // window has opened the project. At the window cap it answers reuseCurrent, after which the editor
+    // would load the project into this window, so that is refused.
+    const { OpenProjectFromEditCommand } = this.mod(M.ipc);
+    const res = await this.mod(M.sender)
+      .EditSender.getInstance()
+      .sendCmdWithResponse(new OpenProjectFromEditCommand(operation, withPath ? projectPath : undefined, extra));
+    const status = res && res.status;
+    if (status === 'succeeded') return { requested: operation, path: withPath ? projectPath : null };
+    if (status === 'reuseCurrent') throw Error(`WINDOW_LIMIT: all ${res.processCount} project windows 像塑 allows are in use; close one with project_close first`);
+    if (status === 'cancelled' && res.reason === 'duplicateProject') throw Error(`PROJECT_ALREADY_OPEN: ${projectPath} is open in another window`);
+    if (status === 'cancelled' || status === 'failed') throw Error(`LAUNCH_${status.toUpperCase()}: ${JSON.stringify(res)}`);
+    throw Error(`UNEXPECTED_LAUNCH_RESPONSE: ${JSON.stringify(res)}`);
   },
 
   // Same path as the toolbar's "back to home": unloads the project and exits this window's process,

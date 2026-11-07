@@ -153,14 +153,13 @@ function setup({ active = true, packageAdds = 1, changed = false } = {}) {
       }
     },
   };
-  class OpenProjectFromHomeCommand {
+  class OpenProjectFromEditCommand {
     constructor(op, p, extra) {
       Object.assign(this, { op, p, extra });
     }
   }
-  class GetProjectProcessStatusCommand {}
-  // Editor process pid -> status, as the home process reports it (2 = Used, 1 = Ready).
-  const processes = new Map([[100, { process: 2 }]]);
+  // What the home process answers the next launch request with.
+  const launch = { response: { status: 'succeeded' } };
   const modules = {
     [M.ef]: {
       Extension: { MenuConfig: { MenuConfigAPIKey: 'menuKey' } },
@@ -183,12 +182,15 @@ function setup({ active = true, packageAdds = 1, changed = false } = {}) {
     },
     [M.hover]: { HoverTipsMap: { _basePath: hoverDir, getObjectTipsBy: (id) => tips[id] || { Enable: false, Images: [''] } } },
     [M.toolbar]: { closeProjectAndBackToHome: async (...a) => calls.closed.push(a) },
-    [M.ipc]: { OpenProjectFromHomeCommand, GetProjectProcessStatusCommand },
-    [M.multiProcess]: { CHILD_PROCESS_LIMIT: 2, ChildProcessStatus: { UnReady: 0, Ready: 1, Used: 2 } },
+    [M.ipc]: { OpenProjectFromEditCommand },
     [M.sender]: {
       EditSender: {
         getInstance: () => ({
-          sendCmdWithResponse: async (cmd) => (cmd instanceof GetProjectProcessStatusCommand ? [...processes] : (calls.launched.push(cmd), 'ok')),
+          sendCmdWithResponse: async (cmd) => {
+            assert.ok(cmd instanceof OpenProjectFromEditCommand);
+            calls.launched.push(cmd);
+            return launch.response;
+          },
         }),
       },
     },
@@ -197,7 +199,7 @@ function setup({ active = true, packageAdds = 1, changed = false } = {}) {
     if (!(name in modules)) throw Error(`MODULE_NOT_FOUND: ${name}`);
     return modules[name];
   };
-  return { lib: new Library(mod), calls, warps, dyn, modules, projectDir, hoverDir, resources, sceneObjects, processes, res };
+  return { lib: new Library(mod), calls, warps, dyn, modules, projectDir, hoverDir, resources, sceneObjects, launch, res };
 }
 
 test('menu_list flattens the editor menu with translated names and hides cloud AI entries', () => {
@@ -307,7 +309,7 @@ test('project_launch asks the home process to open or create, validating the tar
   assert.equal(calls.launched.length, 0);
   fs.writeFileSync(path.join(projectDir, 'effect.dyehpj'), '{}');
   const out = await lib.projectLaunch({ operation: 'openLocal', path: projectDir });
-  assert.deepEqual(out, { requested: 'openLocal', path: projectDir, response: 'ok' });
+  assert.deepEqual(out, { requested: 'openLocal', path: projectDir });
   await lib.projectLaunch({ operation: 'createNew' });
   assert.deepEqual(calls.launched.map((c) => [c.op, c.p]), [['openLocal', projectDir], ['createNew', undefined]]);
   await assert.rejects(lib.projectLaunch({ operation: 'openTemplate', path: 'relative' }), /INVALID_PATH/);
@@ -326,16 +328,20 @@ test('project_launch passes task activity fields as launch extras and validates 
   assert.equal(calls.launched.length, 1);
 });
 
-test('project_launch refuses when every project window allowed is in use', async () => {
-  const { lib, calls, projectDir, processes } = setup();
+test('project_launch turns every refusal of the home process into an error, never reusing this window', async () => {
+  const { lib, projectDir, launch } = setup();
   fs.writeFileSync(path.join(projectDir, 'effect.dyehpj'), '{}');
-  processes.set(101, { process: 1 });
-  await lib.projectLaunch({ operation: 'openTemplate', path: projectDir });
-  assert.equal(calls.launched.length, 1);
-  processes.set(101, { process: 2 });
-  await assert.rejects(lib.projectLaunch({ operation: 'openTemplate', path: projectDir }), /WINDOW_LIMIT: 像塑 allows 2 project windows/);
+  launch.response = { status: 'reuseCurrent', processCount: 2 };
+  await assert.rejects(lib.projectLaunch({ operation: 'openTemplate', path: projectDir }), /WINDOW_LIMIT: all 2 project windows/);
   await assert.rejects(lib.projectLaunch({ operation: 'createNew' }), /WINDOW_LIMIT/);
-  assert.equal(calls.launched.length, 1);
+  launch.response = { status: 'cancelled', reason: 'duplicateProject' };
+  await assert.rejects(lib.projectLaunch({ operation: 'openLocal', path: projectDir }), /PROJECT_ALREADY_OPEN/);
+  launch.response = { status: 'cancelled', reason: 'versionUpgrade' };
+  await assert.rejects(lib.projectLaunch({ operation: 'openLocal', path: projectDir }), /LAUNCH_CANCELLED: .*versionUpgrade/);
+  launch.response = { status: 'failed', loadResult: 'projectBroken' };
+  await assert.rejects(lib.projectLaunch({ operation: 'openLocal', path: projectDir }), /LAUNCH_FAILED: .*projectBroken/);
+  launch.response = undefined;
+  await assert.rejects(lib.projectLaunch({ operation: 'openLocal', path: projectDir }), /UNEXPECTED_LAUNCH_RESPONSE/);
 });
 
 test('project_close refuses unsaved changes unless discarding, then closes asynchronously', async () => {
