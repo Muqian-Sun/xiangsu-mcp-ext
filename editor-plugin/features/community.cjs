@@ -39,6 +39,7 @@ const TASK_PAGE_APP_VERSION = '11.3.0';
 
 const hasOwn = (o, k) => Object.prototype.hasOwnProperty.call(o, k);
 const first = (list) => (Array.isArray(list) && list.length ? list[0] : null);
+// Image structs inside these snake_case responses keep a camelCase urlList ({ uri, urlList, width, height }).
 const str = (v) => (v === undefined || v === null || v === '' ? null : String(v));
 const iso = (ms) => (ms ? new Date(ms).toISOString() : null);
 // The inspiration page stores image sizes this way (its convertToDecimal).
@@ -97,7 +98,7 @@ function slimInspiration(i) {
     collect_count: i.total_collection ?? null,
     collected: !!i.is_collect,
     ai: !!i.is_ai_ins,
-    cover_url: first(i.cover_img && i.cover_img.url_list),
+    cover_url: first(i.cover_img && i.cover_img.urlList),
   };
 }
 
@@ -264,7 +265,7 @@ const methods = {
       tag: base.tag_desc || null,
       effect_types: (base.effect_types || []).map((t) => t.name),
       bonus_text: base.bonus_text || null,
-      images: (base.imgs || []).map((i) => first(i.url_list)).filter(Boolean),
+      images: (base.imgs || []).map((i) => first(i.urlList)).filter(Boolean),
       author: d.designer ? { uid: str(d.designer.uid), name: d.designer.name } : null,
       award: d.award && d.award.amount ? { amount: d.award.amount, text: d.award.text || '', desc: d.award.desc || '' } : null,
       hotspot: hot.title ? { title: hot.title, score: str(hot.score) } : null,
@@ -294,7 +295,7 @@ const methods = {
     const designer = d.designer || {};
     // The card the inspiration page stores with a collection; the collection list renders from it.
     const extra = {
-      img_url: first(img.url_list),
+      img_url: first(img.urlList),
       img_width: decimal(img.width),
       img_height: decimal(img.height),
       tag_desc: base.tag_desc || '',
@@ -469,7 +470,7 @@ const methods = {
           title: i.title,
           tag: i.tag || null,
           description: i.detail || '',
-          cover_url: first(i.cover && i.cover.url_list),
+          cover_url: first(i.cover && i.cover.urlList),
         })),
       }));
       return { topic_id: id, tabs };
@@ -484,7 +485,7 @@ const methods = {
       heat: h.hot_core ?? null,
       heat_text: first(h.tags),
       inspirations_text: h.subtitle_text || null,
-      cover_url: first(h.cover && h.cover.url_list),
+      cover_url: first(h.cover && h.cover.urlList),
     }));
     return { rank_time: d.rank_time || null, subtitle: d.subtitle || null, items };
   },

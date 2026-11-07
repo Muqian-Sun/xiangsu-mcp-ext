@@ -15,7 +15,7 @@ const ok = (data) => JSON.stringify({ code: 0, message: 'success', data });
 const INSPIRATION = {
   id: '7697075498307897370',
   title: '鎏花入镜',
-  cover_img: { uri: 'u', url_list: ['https://cdn/i1.png'], width: 1728, height: 2304 },
+  cover_img: { uri: 'u', urlList: ['https://cdn/i1.png'], width: 1728, height: 2304 },
   tag_desc: '激励',
   author_name: '唐糖',
   author_avatar: 'https://cdn/a.png',
@@ -29,7 +29,7 @@ const INSPIRATION_DETAIL = {
     id: '7696975869251864618',
     title: '万元券锦鲤妆',
     detail_desc: 'AI 锦鲤妆造',
-    imgs: [{ uri: 'x', url_list: ['https://cdn/d1.png'], width: 1728, height: 2304 }],
+    imgs: [{ uri: 'x', urlList: ['https://cdn/d1.png'], width: 1728, height: 2304 }],
     effect_types: [{ id: 5841, name: 'AI 妆造扮演' }],
     bonus_text: '收藏灵感，即有机会获得激励',
     tag_desc: '',
@@ -114,18 +114,18 @@ const HOTSPOTS = {
       id: '2728034',
       title: '原来深秋是咕嘟的',
       topic_id: '13439',
-      cover: { url_list: ['https://cdn/h1.png'] },
+      cover: { urlList: ['https://cdn/h1.png'] },
       hot_core: 19727126,
       subtitle_text: '69条创作灵感',
       rank_num: 10,
       description: '深秋咕嘟暖感强',
       tags: ['1972.7万热度'],
     },
-    { id: '2729772', title: '立冬', topic_id: '13444', cover: { url_list: [] }, hot_core: 19384492, rank_num: 21, tags: [] },
+    { id: '2729772', title: '立冬', topic_id: '13444', cover: { urlList: [] }, hot_core: 19384492, rank_num: 21, tags: [] },
   ],
 };
 const HOTSPOT_INSPIRATIONS =
-  '{"code":0,"message":"success","data":{"insp_tabs":[{"id":0,"title":"全部","insps":[{"tag":"AI 妆造扮演","id":7704552248298391592,"title":"宿舍小电锅咕嘟达人","cover":{"uri":"u","url_list":["https://cdn/hi.png"]},"detail":"AI 宿舍场景"}]}]}}';
+  '{"code":0,"message":"success","data":{"insp_tabs":[{"id":0,"title":"全部","insps":[{"tag":"AI 妆造扮演","id":7704552248298391592,"title":"宿舍小电锅咕嘟达人","cover":{"uri":"u","urlList":["https://cdn/hi.png"]},"detail":"AI 宿舍场景"}]}]}}';
 const SUBJECT = {
   subject_id: '261',
   subject_name: '测一测玩法特效榜 - 11月 ',
@@ -245,6 +245,7 @@ test('community requests carry the editor login cookie and signing headers and k
   const { lib, calls, cookieUrls } = setup();
   const out = await lib.rankHotspots({ topic_id: '13439' });
   assert.equal(out.tabs[0].inspirations[0].inspiration_id, '7704552248298391592');
+  assert.equal(out.tabs[0].inspirations[0].cover_url, 'https://cdn/hi.png');
   const month = await lib.rankCreatorsMonth();
   assert.equal(month.items[0].uid, '7495234997042594875');
   assert.equal(calls[0].origin, 'https://api.test');
