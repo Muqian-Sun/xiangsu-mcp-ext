@@ -29,6 +29,7 @@ const OWN = [
   'library_nav',
   'library_preview',
   'library_search',
+  'makeup_layers',
   'menu_add',
   'menu_list',
   'menu_preview',
