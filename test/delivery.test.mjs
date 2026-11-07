@@ -13,6 +13,9 @@ import { QrCodes } from '../src/qrcodes.mjs';
 
 const require = createRequire(import.meta.url);
 const { Library, M } = require('../editor-plugin/library.cjs');
+const { PAGE_TIMING } = require('../editor-plugin/features/delivery.cjs');
+
+PAGE_TIMING.closeMs = 300;
 
 class Bus {
   constructor() {
@@ -32,13 +35,12 @@ class Bus {
 }
 
 // A fake editor with one open project and the delivery and music modules.
-function setup({ size = 1000, maxSize = 5000, sameAsTemplate = false, effectIdOk = true, loggedIn = true, remote = 0, perfStatus, openWindow = true, mobileResponse, iconUploadOk = true } = {}) {
+function setup({ size = 1000, maxSize = 5000, sameAsTemplate = false, effectIdOk = true, loggedIn = true, remote = 0, perfStatus, perfWindow = true, mobileResponse, iconUploadOk = true } = {}) {
   const projectDir = tmpdir('xs-proj-');
   const instance = tmpdir('xs-inst-');
   const calls = { exportDirs: [], imported: [], exist: [], savedJson: 0, iconWindow: [], showPerf: 0, cookie: 0, uploaded: [], applied: [], sdkMapping: 0, exportOpts: [], iconDeleted: [], iconSteps: [] };
   const business = new Bus();
   const legacy = new Bus();
-  business.on('SubmitEffect', () => openWindow && legacy.emit('OnSubmitWindowOpened', 1, size));
   const project = {
     path: projectDir,
     sceneManager: { mainScene: { id: 'main' } },
@@ -108,7 +110,23 @@ function setup({ size = 1000, maxSize = 5000, sameAsTemplate = false, effectIdOk
       throw Error('must never publish');
     },
   };
-  const perfApi = { showWindow: () => ((calls.showPerf += 1), perfStatus !== undefined && business.emit('getPerfTestStatus', perfStatus)) };
+  // The editor's top-level windows; 特效检测 adds a new one on every call, as the real API does.
+  globalThis.App = { _windows: [{ constructor: { name: 'MainWindow' }, isClosed: false }] };
+  class DYEHPerfTestWebWindow {
+    constructor() {
+      this.isClosed = false;
+    }
+    closeWindow() {
+      setTimeout(() => (this.isClosed = true), 5);
+    }
+  }
+  const perfApi = {
+    showWindow: () => {
+      calls.showPerf += 1;
+      if (perfWindow) globalThis.App._windows.push(new DYEHPerfTestWebWindow());
+      if (perfStatus !== undefined) setTimeout(() => business.emit('getPerfTestStatus', perfStatus), 5);
+    },
+  };
   const marked = { done: false };
   const modules = {
     [M.ef]: {
@@ -275,21 +293,40 @@ test('submitChecks removes the scratch folder when the export fails', async () =
   assert.deepEqual(leftovers(instance), []);
 });
 
-test('effect_check only opens the 特效检测 window, listening first, and maps the status code', async () => {
+test('effect_check opens the 特效检测 window, listening first, maps the status code and closes the window', async () => {
   const done = setup({ perfStatus: 3 });
-  assert.deepEqual(await done.lib.effectCheck({ timeout_ms: 1000 }), { finished: true, status_code: 3, result: 'needs_optimization' });
+  assert.deepEqual(await done.lib.effectCheck({ timeout_ms: 1000 }), { finished: true, status_code: 3, result: 'needs_optimization', closed_previous: 0, window_closed: true });
   assert.equal(done.calls.showPerf, 1);
   assert.deepEqual(done.calls.exportDirs, [], 'no local export');
+  assert.equal(globalThis.App._windows.filter((w) => !w.isClosed).length, 1, 'only the main window is left');
+});
+
+test('effect_check leaves a window still checking at its timeout, and the next call closes it first', async () => {
   const slow = setup();
   const out = await slow.lib.effectCheck({ timeout_ms: 20 });
   assert.equal(out.finished, false);
   assert.equal(out.result, 'timeout');
+  const left = globalThis.App._windows.filter((w) => w.constructor.name === 'DYEHPerfTestWebWindow' && !w.isClosed);
+  assert.equal(left.length, 1);
+  const again = await slow.lib.effectCheck({ timeout_ms: 20 });
+  assert.equal(again.closed_previous, 1);
+  assert.equal(left[0].isClosed, true);
+  assert.equal(globalThis.App._windows.filter((w) => w.constructor.name === 'DYEHPerfTestWebWindow' && !w.isClosed).length, 1, 'never more than one');
+});
+
+test('effect_check fails when no 特效检测 window shows up, or an old one will not close', async () => {
+  await assert.rejects(setup({ perfWindow: false, perfStatus: 1 }).lib.effectCheck({ timeout_ms: 1000 }), /PERF_WINDOW_NOT_FOUND/);
+  const stuck = setup({ perfStatus: 1 });
+  globalThis.App._windows.push({ constructor: { name: 'DYEHPerfTestWebWindow' }, isClosed: false, closeWindow() {} });
+  await assert.rejects(stuck.lib.effectCheck({ timeout_ms: 1000 }), /WINDOW_NOT_CLOSED: 1 DYEHPerfTestWebWindow/);
+  assert.equal(stuck.calls.showPerf, 0, 'no new window while the old one is open');
+  const { lib } = setup();
+  globalThis.App = {};
+  await assert.rejects(lib.effectCheck({ timeout_ms: 10 }), /INCOMPATIBLE_EDITOR: App._windows/);
 });
 
 test('submit_prepare checks its arguments and does not open the submit window when the local checks fail', async () => {
   const bad = setup({ loggedIn: false });
-  bad.modules[M.webWindow] = { EHWebWindow: class {} };
-  bad.modules[M.webWindow].EHWebWindow.prototype.showWindow = () => {};
   const refused = await bad.lib.submitPrepare({ name: '名字' });
   assert.equal(refused.opened, false);
   assert.ok(refused.check.issues.some((i) => i.startsWith('NOT_LOGGED_IN')));

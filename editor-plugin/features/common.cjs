@@ -39,7 +39,6 @@ const M = {
   iconWindow: '@orion/Business/IconCreationNew/IconCreationWindow',
   iconUpload: '@orion/Business/IconCreationNew/UI/BottomPanel/DYEHIconUploadHelper',
   submission: '@orion/Business/Submission/SubmissionExtension/EffectSubmissionExtension',
-  webWindow: '@orion/Business/Window/WebWindow/EHWebWindow',
   perfTest: '@orion/Business/PerfTest/PerfTestExtension',
   events: '@orion/Business/Event/BusinessEventManager',
   login: '@orion/Business/Login/LoginContribution',

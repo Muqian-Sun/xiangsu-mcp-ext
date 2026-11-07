@@ -16,6 +16,7 @@ const MODERATION_FAILED = 2706;
 // Picked, not measured: the submit window normally opens within a few seconds of the export.
 const SUBMIT_WINDOW_WAIT_MS = 60000;
 const SUBMIT_WINDOW = 'DYEHEffectSubmissionWindow';
+const PERF_WINDOW = 'DYEHPerfTestWebWindow';
 // The submit page's 默认摄像头方向 options.
 const CAMERA = { front: '前置', back: '后置' };
 // Steps of the submit page, by their header labels.
@@ -27,7 +28,8 @@ const FILLED_SECTIONS = ['特效图标', '默认摄像头方向', '特效名称'
 // live), so filling waits for that request, or, should the page stop making it, until no request has
 // finished for quietMs. settleMs lets a picked option or typed text render before it is read back.
 // The 提交审核 step's checks (performance, similarity…) finished within a minute live; checksMs is picked.
-const PAGE_TIMING = { readyMs: 30000, quietMs: 1500, pollMs: 300, settleMs: 800, stepMs: 5000, checksMs: 180000 };
+// closeMs is picked: closed submit windows were gone within 0.5 s live.
+const PAGE_TIMING = { readyMs: 30000, quietMs: 1500, pollMs: 300, settleMs: 800, stepMs: 5000, checksMs: 180000, closeMs: 10000 };
 const checkPending = (c) => c.endsWith('中...');
 const checkPassed = (c) => c.endsWith('通过') && !/[未不]通过$/.test(c);
 
@@ -45,24 +47,40 @@ function projectIcons(lib, project) {
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const quote = (list) => (list.length ? `; the page says: ${list.join(' | ')}` : '');
 
+// The editor keeps no reference to the submit and 特效检测 windows it opens, and opens a new one on every
+// call, so they are found among the process's top-level windows (App._windows) by class.
+function openWindows(className) {
+  const list = globalThis.App && globalThis.App._windows;
+  if (!Array.isArray(list)) throw Error('INCOMPATIBLE_EDITOR: App._windows is not the list of open windows');
+  return list.filter((w) => w && w.constructor && w.constructor.name === className && !w.isClosed);
+}
+
+async function closeWindows(wins) {
+  for (const w of wins) w.closeWindow();
+  const until = Date.now() + PAGE_TIMING.closeMs;
+  while (wins.some((w) => !w.isClosed) && Date.now() < until) await sleep(100);
+  const left = wins.filter((w) => !w.isClosed);
+  if (left.length) throw Error(`WINDOW_NOT_CLOSED: ${left.length} ${left[0].constructor.name} window(s) did not close in ${PAGE_TIMING.closeMs} ms`);
+  return wins.length;
+}
+
+// Runs `open` and returns the `className` window it added, or null when it added none.
+async function windowOpenedBy(className, open) {
+  const before = new Set(openWindows(className));
+  await open();
+  return openWindows(className).find((w) => !before.has(w)) || null;
+}
+
 // Emits the toolbar's SubmitEffect and returns the submit window it opens (null when it does not open).
-// The editor keeps no reference to that window, so it is caught as it is shown.
 async function openSubmitWindow(lib) {
-  const { EHWebWindow } = lib.mod(M.webWindow);
-  const show = EHWebWindow.prototype.showWindow;
-  let win = null;
-  EHWebWindow.prototype.showWindow = function (...args) {
-    if (this.constructor && this.constructor.name === SUBMIT_WINDOW) win = this;
-    return show.apply(this, args);
-  };
-  try {
-    const opened = nextEvent(lib.mod(M.ef).EventManager_deprecated.TypeGuard(), 'OnSubmitWindowOpened', SUBMIT_WINDOW_WAIT_MS, () => null);
+  let opened = false;
+  const win = await windowOpenedBy(SUBMIT_WINDOW, async () => {
+    const event = nextEvent(lib.mod(M.ef).EventManager_deprecated.TypeGuard(), 'OnSubmitWindowOpened', SUBMIT_WINDOW_WAIT_MS, () => null);
     lib.mod(M.events).BusinessEventManager.TypeGuard().emit('SubmitEffect');
-    if (!(await opened)) return null;
-  } finally {
-    EHWebWindow.prototype.showWindow = show;
-  }
-  if (!win) throw Error(`SUBMIT_WINDOW_NOT_FOUND: a submit window opened but none was a ${SUBMIT_WINDOW}; the editor changed`);
+    opened = !!(await event);
+  });
+  if (!opened) return null;
+  if (!win) throw Error(`SUBMIT_WINDOW_NOT_FOUND: a submit window opened but no new ${SUBMIT_WINDOW} is among the open windows; the editor changed`);
   return win;
 }
 
@@ -241,23 +259,28 @@ const methods = {
   },
 
   // The toolbar's 特效检测 button (PerfTestButton) only opens this window; its page uploads the package
-  // and runs the cloud check, then reports a status code back through getPerfTestStatus. Details stay
-  // visible in that window.
+  // and runs the cloud check, then reports a status code back through getPerfTestStatus. The window is
+  // closed once the code arrives; one left by an earlier call (still running at its timeout) is closed first.
   async effectCheck({ timeout_ms = 300000 } = {}) {
     this.ensureCompatible('check');
     activeProject(this);
+    const closed_previous = await closeWindows(openWindows(PERF_WINDOW));
     const bus = this.mod(M.events).BusinessEventManager.TypeGuard();
     const result = nextEvent(bus, 'getPerfTestStatus', timeout_ms, () => null);
-    this.mod(M.orionui).ExtensionManager.host.getAPI(this.mod(M.perfTest).PerfTestAPIKey).showWindow();
+    const api = this.mod(M.orionui).ExtensionManager.host.getAPI(this.mod(M.perfTest).PerfTestAPIKey);
+    const win = await windowOpenedBy(PERF_WINDOW, () => api.showWindow());
+    if (!win) throw Error(`PERF_WINDOW_NOT_FOUND: 特效检测 opened no ${PERF_WINDOW} window; the editor changed`);
     const hit = await result;
-    if (!hit) return { finished: false, result: 'timeout', note: 'the 特效检测 window is still open; read the result there' };
+    if (!hit) return { finished: false, result: 'timeout', closed_previous, note: 'the 特效检测 window is left open with the check running; the next effect_check closes it' };
     const code = hit.args[0];
-    return { finished: true, status_code: code, result: PERF_STATUS[code] || 'unknown' };
+    await closeWindows([win]);
+    return { finished: true, status_code: code, result: PERF_STATUS[code] || 'unknown', closed_previous, window_closed: true };
   },
 
   // Same entry as the toolbar's 提交特效 button: the editor runs its own pre-checks and opens the submit
-  // window. The window's page is then filled in step by step and left on its 提交审核 step; every value is
-  // read back from the page, and anything the page refused or changed fails the call with the window open.
+  // window, after any submit window still open (from an earlier call) is closed. The window's page is then
+  // filled in step by step and left on its 提交审核 step; every value is read back from the page, and
+  // anything the page refused or changed fails the call with the window open.
   async submitPrepare({ name, trigger_hint, camera, inspiration, task, task_track } = {}) {
     this.ensureCompatible('submit');
     if (typeof name !== 'string' || !name) throw Error('INVALID_NAME: pass the effect name');
@@ -265,11 +288,12 @@ const methods = {
     if (task_track !== undefined && task === undefined) throw Error('INVALID_TASK: task_track needs task');
     const check = await this.submitChecks();
     if (!check.ok) return { opened: false, check };
+    const closed_previous = await closeWindows(openWindows(SUBMIT_WINDOW));
     const win = await openSubmitWindow(this);
-    if (!win) return { opened: false, check, note: 'the submit window did not open; the editor shows the reason (e.g. login, size limit) in a toast or dialog' };
+    if (!win) return { opened: false, check, closed_previous, note: 'the submit window did not open; the editor shows the reason (e.g. login, size limit) in a toast or dialog' };
     const run = submitPageBridge(win);
     try {
-      return { opened: true, check, ...(await fillSubmitPage(run, { name, trigger_hint, camera: camera && CAMERA[camera], inspiration, task, task_track })) };
+      return { opened: true, check, closed_previous, ...(await fillSubmitPage(run, { name, trigger_hint, camera: camera && CAMERA[camera], inspiration, task, task_track })) };
     } catch (e) {
       throw Error(`${e.message} (the submit window is left open)`);
     }
