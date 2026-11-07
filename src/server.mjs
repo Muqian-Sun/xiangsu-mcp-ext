@@ -474,11 +474,26 @@ export function createServer(deps = {}) {
     {
       name: 'submit_prepare',
       description:
-        '准备提交特效：先在本地检查提交流程会拒收的情况（包体上限、是否原样套用模板、登录、图标），全部通过后走和工具栏「提交特效」按钮相同的入口，由编辑器做自己的前置检查并打开提交窗口。只做到提交窗口打开为止：名称、提示语在窗口里填，真正的上传发布只有用户在窗口里确认才会发生，本工具不会发布。检查未通过时不打开窗口，返回 issues。',
-      shape: { ...target },
+        '填好提交窗口，停在最后一步等用户点「提交审核」：先在本地检查提交流程会拒收的情况（包体上限、是否原样套用模板、登录、图标），全部通过后走和工具栏「提交特效」按钮相同的入口打开提交窗口，然后逐页填写：「特效基础信息」页填名称、触发提示、默认摄像头方向（图标来自工程，可先用 icon_image 设好），「特效发布设置」页选灵感和任务，再翻到「提交审核」页，等页面上的检测（包体积、性能、相似度等，一般一分钟内）跑完，返回页面摘要、各检测结果、是否已同意创作者协议、「提交审核」按钮是否可点，以及 next（用户还要做什么）。本工具不会勾选协议，也不会点「提交审核」，发布只在用户点了之后发生。每一项都从页面读回核对：页面截断、报错、没选上、或翻页被拦住时直接报错（SUBMIT_*，原样带上页面提示），窗口保持打开。页面上本工具没填的其它设置（如活动、创新声明）列在 other_sections 里，保持页面原样。本地检查未通过时不打开窗口，返回 issues。',
+      shape: {
+        ...target,
+        name: z.string().min(1).describe('特效名称（必填）：最多 10 个字，两个英文字母或数字算一个字，不能有表情和特殊符号；页面截断或报错时整次调用失败。'),
+        trigger_hint: z.string().optional().describe('特效触发提示，开拍时显示，如「张嘴试试」：最多 10 个字；省略时保留页面带出的内容，传空串清空。'),
+        camera: z.enum(['front', 'back']).optional().describe('默认摄像头方向：front 前置、back 后置；省略时保留页面的默认（一般是前置）。'),
+        icon_image: z.string().min(1).optional().describe('先用这张图设图标（同 icon_set 的默认：女性、男性两个位，并上传），再打开提交窗口；省略时用工程现有的图标。'),
+        inspiration: z
+          .string()
+          .min(1)
+          .optional()
+          .describe('「灵感绑定」要选的灵感或热点，取它在列表里显示的名称（当前账号收藏的灵感或热点，名称同 inspiration_list 的标题）；传「暂不绑定」解绑；省略时保留页面带出的（inspiration_bind 绑定过的会自动带出）。'),
+        task: z.string().min(1).optional().describe('「任务绑定」要选的任务标题（已领取的任务，同 tasks_list 的 title）；传「暂不参与」解绑；省略时保留页面带出的（task_bind 绑定过的会自动带出）。'),
+        task_track: z.string().min(1).optional().describe('任务下的赛道名称，任务分赛道时必填，否则报 SUBMIT_TASK_NEEDS_TRACK 并列出赛道。'),
+      },
       run: async (a) => {
-        const projectPath = await projects.resolveProjectPath(a);
-        return text(await d.callPlugin('submit_prepare', {}, { projectPath, timeoutMs: 360000 }));
+        const { project_path, instance_id, icon_image, ...fill } = a;
+        const projectPath = await projects.resolveProjectPath({ project_path, instance_id });
+        if (icon_image !== undefined) await setIcon(projectPath, icon_image);
+        return text(await d.callPlugin('submit_prepare', fill, { projectPath, timeoutMs: 360000 }));
       },
     },
     {
