@@ -8,7 +8,7 @@
 - 官方素材库：浏览、搜索、看封面、应用（脸部变形、美型、AI 实时变脸、美妆、滤镜、贴纸、画面特效等），流程与素材库面板相同；包括「素材广场」（其他创作者分享的现成 AI 图片、AI 妆容、自定义实时变脸、贴纸和素材包，应用时不重新生成、不扣额度）和自己的「收藏」。
 - 「添加对象」菜单：工具栏美妆 / 美型 / AI 实时变脸里的全部官方功能项（美容、面部生成、表情生成、性别年龄、五官处理、身体换装等），可看示意图后按菜单项 ID 添加。
 - 首页作品：浏览、搜索、看封面，下载完整工程到本地或直接在编辑器里打开（官方工程和已发布的作品），供 agent 读取场景、脚本和资源，学习别人的做法；下载的东西都有登记，用完即删，最长保留 24 小时。
-- 交付：设置并上传图标、特效检测（和编辑器里点「特效检测」一样，云端检测）、打开提交窗口（发布由你在窗口里确认）、手机预览二维码、把已领取的任务或创作灵感绑定到工程。
+- 交付：设置并上传图标、特效检测（和编辑器里点「特效检测」一样，云端检测）、填好提交窗口（名称、触发提示、摄像头方向、灵感、任务，一直走到「提交审核」页并等检测跑完；最后的「提交审核」由你来点）、手机预览二维码、把已领取的任务或创作灵感绑定到工程。
 - 抖音音乐：按分类或关键词找歌，设为特效音乐。
 - 灵感、任务、排行榜：首页「灵感」页签和活动中心的任务（征集任务、成长任务），以及像塑移动版才有的排行榜（年轻 / 男生 / 女生喜爱榜、每日投稿榜、热玩互动榜、跟拍榜，各榜按两级分类细分；热点榜；专题合集里两百多期主题特效榜和模板榜；创新计划月榜和官方精选），用编辑器里登录的账号读取；可收藏灵感、领取任务。
 - 塑型画笔（FaceWarpX）强度：官方能读不能写，这里按检查器滑块的方式改。
@@ -45,7 +45,7 @@
 | `works_cleanup` | 删除下载过的作品（含 `dest`）；编辑器窗口开着的保留，其它路径一律拒绝 |
 | `icon_set` / `icon_open` | 把一张图片裁成 360×360 PNG 设为工程图标（默认女性、男性两版，提交窗口要这两个），并像「图标制作」窗口的「完成」一样上传到特效平台（提交窗口只认上传过的图标）；或打开「图标制作」窗口 |
 | `effect_check` | 和工具栏「特效检测」按钮一样：打开特效检测窗口做云端检测（会上传特效包做测试，不是发布），等待结果 |
-| `submit_prepare` | 本地检查包体上限、是否原样套用模板、登录、图标，通过后走「提交特效」按钮的入口，只打开提交窗口；上传发布只在你点确认时发生 |
+| `submit_prepare` | 本地检查包体上限、是否原样套用模板、登录、图标，通过后走「提交特效」按钮的入口打开提交窗口，逐页填写：名称（必填）、触发提示、默认摄像头方向、灵感、任务和赛道（可用 `icon_image` 先设图标），翻到「提交审核」页并等页面检测跑完，返回摘要、检测结果、协议是否已同意和 `next`（你还要做什么）。每一项都从页面读回核对，页面截断、报错、没选上或翻页被拦时报 `SUBMIT_*` 错误，窗口保持打开。不勾协议，也不点「提交审核」 |
 | `mobile_preview` | 按手机预览方式打包上传到抖音预览服务，返回和编辑器一样的二维码（7 天有效），抖音 App 扫码真机看；二维码同时存成文件（`~/.xiangsu-mcp-ext/mobile-qr/`），到期自动删除 |
 | `inspiration_nav` / `inspiration_list` / `inspiration_detail` | 灵感分类、分页列表、详情（说明、图片、奖励、关联热点、同灵感特效、是否已收藏） |
 | `inspiration_collect` | 收藏或取消收藏灵感（写账号），之后重新查询确认生效 |
@@ -72,7 +72,7 @@
 - 套用官方素材：`library_search` → `image_view` 看 `cover_url` → `library_apply` → `capture_preview` → `save_project`。
 - 读别人的工程：`works_search`（或 `works_list`）→ `image_view` 看 `cover_url` / `gif_url` → `works_download` → 按返回的 `outline.files` 读 `effect.dyehpj`、`Assets/` 下的场景和 `Graph/` 下的脚本 → `works_cleanup`。
 - 在编辑器里看别人的效果：`works_open` → `get_scene` / `capture_preview` → `project_close`（`discard_changes=true`）→ `works_cleanup`。
-- 交付：`icon_set` → `effect_check` → `mobile_preview` 真机看 → `save_project` → `submit_prepare`，在提交窗口里填名称并确认发布。要参加任务的，`tasks_list` → `task_receive` → 再 `tasks_list` → `task_bind`。
+- 交付：`icon_set` → `effect_check` → `mobile_preview` 真机看 → `save_project` → `submit_prepare`（`name`、`trigger_hint` 等），检查返回的摘要和 `next`，在窗口里点「提交审核」。要参加任务的，`tasks_list` → `task_receive` → 再 `tasks_list` → `task_bind`，或者直接在 `submit_prepare` 里传 `task`。
 - 找选题：`rank_nav` → `rank_list`（如 `rank_type=1` 年轻喜爱榜、`categories=["人像美化","美妆"]`、`levels=["S","A+"]`）看什么在火；`rank_subjects`（`keyword="测一测"` 或 `kind="template"`）看各期主题榜；`rank_hotspots` → 带 `topic_id` 看热点灵感 → `inspiration_detail` → `image_view` 看图；`tasks_list` → `task_detail` 看征集要求和奖项 → `image_view` 看内容块里的参考图。
 - 看榜上特效的工程：`rank_list` → 把这页的 `effect_id` 和 `name` 交给 `works_by_effect` → `status=found` 的用返回的 `template_id` 走 `works_download` / `works_open`。
 - 拆别人的妆：`works_download` → `makeup_layers` 看用了哪些部位、什么颜色、多浓；自己的工程 `save_project` 后同样用 `makeup_layers` 查缺了哪些部位。
@@ -88,6 +88,7 @@
 - 几处上限是在服务端实测的：`rank_list` 和 `rank_subjects` 每页最多 20、`inspiration_list` 每页最多 50（100 会报错）、专题榜详情一次最多 20。移动版的「特效优秀视频榜」接口对所有榜单都返回空，没有提供。
 - 只有作者分享到首页的特效才有工程可下载。排行榜的 `effect_id` 和首页作品的 `effect_id` 是同一套编号，`works_by_effect` 按 ID 精确匹配（与首页搜索框的「特效ID」搜索同一个接口，默认在「推荐」里查，首页在「官方工程」里不提供按 ID 搜）。按 ID 搜时「推荐」也能查到只出现在其它分类的作品（2026-11-07 实测 8 个全中，在它们自己的分类里按 ID 搜反而一个都查不到），所以不用跨分类查。
 - 首页翻页除了 cursor 还要带上一页返回的 `sortingPosition` 和 `version`（编辑器首页就是这样翻的），只带 cursor 每一页都是第一页；`works_list` 的 `next_cursor` 把三者编在一起。按作品名搜索时，「推荐」翻到底只有约 300 条，「美化」「友友天地」等分类里还有它没有的（「头套」多 46 条、「美妆」多 87 条），所以 `works_search` 默认搜全部分类。服务端偶尔会提前结束一轮翻页（6 轮里有 1 轮停在 249 条），没到 300 条上限的分类会再翻一轮合并；服务端一直给同一页时停下，并把分类列在 `incomplete`。每个特效要一到两次请求（查不到 ID 且给了名字时再按名字搜一次），实测查一页 20 个用了约 10 秒。结果分三种：`found` 首页有这个特效的工程；`same_name` 首页没有它，只有同名作品，`effect_id` 不同，可能是别人的作品，不能当成同一个特效；`not_on_homepage` 作者没公开工程，没有正规途径能拿到（编辑器「我的特效」里的工程下载只对自己的特效开放）。2026-11-07 实测年轻喜爱榜第一页 20 个特效：10 个 `found`，1 个 `same_name`，9 个 `not_on_homepage`。
+- 提交窗口是抖音特效平台的网页（`effect.douyin.com/ac/submit-orion`，每次在线加载，安装包里的离线版本较旧，字段也不同）。`submit_prepare` 按页面上的类名和文案找元素，页面改版后找不到时报 `SUBMIT_PAGE_CHANGED`，不会跳过。名称框会在页面的 `aiName` 配置请求回来时重新挂载，先填的内容会被清空（2026-11-07 实测，配置在表单出现约 1 秒后才回来），所以工具等这个请求完成再填，最后再用「提交审核」页的摘要核对一遍。灵感下拉只列当前账号收藏的灵感和热点，每次加载 10 条，不在列表里的用页面的搜索框找；选了和灵感所带任务不一致的任务时，页面会清掉灵感，工具会报 `SUBMIT_BINDING_NOT_APPLIED`。「特效发布设置」页上按账号出现的其它设置（活动、创新声明、作品授权）不填，列在 `other_sections`。
 - `works_download` / `works_open` 走编辑器自己的下载流程，每次解压一份新的到像塑实例目录的 `ProjectCreatedTmp/CreatedFromTemplate/<guid>/` 下。`dest` 副本不含 `Library/` 缓存（编辑器打开时会重建）。
 - 下载物不留痕：
   - 编辑器缓存在 `~/Library/Application Support/DouyinAR/Shared/Resources/LokiDownload/TemplateResources/` 的工程包，解压后立即删除（下载前已存在的视为你自己在首页用过的缓存，不动）。
@@ -135,7 +136,7 @@ node scripts/install.mjs   # 装到 ~/Library/Application Support/DouyinAR/Plugi
 
 ## 开发
 
-- `npm test`：用模拟的编辑器模块测插件逻辑；用内存传输测 MCP 工具、官方转发、工程窗口编排。
+- `npm test`：用模拟的编辑器模块测插件逻辑；用 jsdom 按线上结构搭的提交页测填写流程；用内存传输测 MCP 工具、官方转发、工程窗口编排。
 - `node scripts/mcp-call.mjs <tool> '<json>' [...]`：新起一个服务按顺序调工具，图片写到 `<临时目录>/xs-mcp-call/` 下每次运行一个子目录（一小时后清理）。`scripts/official-call.mjs` 直调官方 MCP，图片同样放在 `xs-official-call/` 下。
 - `node scripts/call.mjs <method> '<json>' [--pid N]`：直调插件。
 - `node scripts/e2e.mjs <工程路径> <关键词> [标题]`：搜索 + 应用 + 未知 ID 报错的端到端检查（会真的导入素材，只对测试工程用）。
@@ -152,7 +153,7 @@ node scripts/install.mjs   # 装到 ~/Library/Application Support/DouyinAR/Plugi
 - 菜单：`@orion/orion-sdk/orionui` 的 `ExtensionManager` / `I18n`，`DynamicMenuConfigInfo`，`SceneOpsService.createEntity`，`HoverTipsMap`
 - 工程窗口：`OpenProjectFromEditCommand` + `EditSender`（与编辑器自己的 `launchProject` 同一请求，9.8.1 起首页进程只认它），`closeProjectAndBackToHome`
 - 首页作品：`@orion/Business/HomeWindow/TemplatesPanel/Request/{templatesPanel,templatesCategory}`、`.../Model/util.transformTemplate`、`.../Model/DownloadTemplateModel`；打开作品用 `OpenProjectFromEditCommand` 的 `openTemplate`
-- 交付：`IconCreationNew/controller/IconPreviewManager`、`IconCreationNew/UI/BottomPanel/DYEHIconUploadHelper.uploadIcon`（上传图标，写回 `iconUri`）、`Submission/SubmissionExtension/EffectSubmissionExtension`（提交接口 `submit()` 只做前置检查并打开提交窗口）、`PerfTest/PerfTestExtension`、`EditWindow/ToolBar/MobilePreview/backendHelper`、`effectExporter.exportEffectPackage`
+- 交付：`IconCreationNew/controller/IconPreviewManager`、`IconCreationNew/UI/BottomPanel/DYEHIconUploadHelper.uploadIcon`（上传图标，写回 `iconUri`）、`Submission/SubmissionExtension/EffectSubmissionExtension`（提交接口 `submit()` 只做前置检查并打开提交窗口）、`Window/WebWindow/EHWebWindow`（提交窗口是网页窗口，打开时取到它；网页里的脚本经 `webview.evaluateJavascript` 注入，结果经窗口的 JS bridge 以 `orionJSB://` 查询传回）、`PerfTest/PerfTestExtension`、`EditWindow/ToolBar/MobilePreview/backendHelper`、`effectExporter.exportEffectPackage`
 - 灵感、任务、排行榜：`BusinessCommon/UrlConst` 的 `Domain.kBackendApiURL` 与 `DomainPath.{kActivityAPI,kTaskListAPI,kGrowthTaskList}`、`orion-sdk/orionui` 的 `CookieManager`、`BusinessCommon/Utils` 的 `PlatformUtils.genSignData` / `UserAgentUtils.userAgentGenerator`、`HomeWindow/ActivitiesCenter/Common/types`（任务状态、`getTypeName`）、`InspirationDetail/View/const` 的收藏类型、`Agent/AgentInspirationBridge`
 - 音乐：`EditWindow/Inspector/MusicLibrary/{Model/MusicCategoryModel,Model/MusicListModel,Component/MusicListComponent/MusicSquareManager}`
 - 预览帧：`Business/Preview/PreviewManager` 的 `cacheCurrentFrame` / `captureScreenshotToMemory`（渲染结果；9.8.1 前官方截图也走这组调用）；重置用 `PreviewSyncer.requestReloadSticker` 加 `PreviewReloaded` 与 `PreviewTextureUpdated` 事件；后台帧率用 `EditWindow/BackgroundModeManager.setRecordingMode`；窗口是否可见看 `EditWindow/EditWindowController` 的窗口和 `orionui.WindowState`
@@ -168,6 +169,6 @@ node scripts/install.mjs   # 装到 ~/Library/Application Support/DouyinAR/Plugi
 
 ## English
 
-Unofficial MCP extension for Douyin AR (像塑) on macOS. One stdio MCP server proxies every tool of the editor's official MCP (with automatic reconnects) and adds what the official server cannot do: browse/search/preview/apply official library assets, browse/search/download or open the homepage works (official projects and published effects) as full projects an agent can read and learn from (rank-board effects are looked up there by effect id, though effects whose authors did not share them on the homepage have no downloadable project; every download is registered and deleted by works_cleanup or after 24 hours), add any item of the editor's "add object" menu (toolbar makeup / reshape / AI face effects), list a project's makeup layers with the face part, colour and strength of each (from the layer's region and its texture's pixels when the name says nothing), set FaceWarpX brush intensity, prepare delivery (setting and uploading the icon, local and cloud effect checks, opening the submit window — publishing stays a user click — phone preview QR codes, binding received creator tasks or inspirations), read the signed-in account's inspirations and tasks (collect inspirations, receive tasks) and the mobile app's rank boards, use Douyin music, open/create/close project windows, and remove objects together with resources only they used. It works through a small editor plugin that exposes a token-protected RPC on 127.0.0.1 inside each project window. Relies on editor internals (verified on 9.7.2); `ext_status` reports any missing internals. Install with `npm ci && node scripts/install.mjs`, then register `node src/server.mjs` as a stdio MCP server.
+Unofficial MCP extension for Douyin AR (像塑) on macOS. One stdio MCP server proxies every tool of the editor's official MCP (with automatic reconnects) and adds what the official server cannot do: browse/search/preview/apply official library assets, browse/search/download or open the homepage works (official projects and published effects) as full projects an agent can read and learn from (rank-board effects are looked up there by effect id, though effects whose authors did not share them on the homepage have no downloadable project; every download is registered and deleted by works_cleanup or after 24 hours), add any item of the editor's "add object" menu (toolbar makeup / reshape / AI face effects), list a project's makeup layers with the face part, colour and strength of each (from the layer's region and its texture's pixels when the name says nothing), set FaceWarpX brush intensity, prepare delivery (setting and uploading the icon, local and cloud effect checks, filling in the submit window — name, trigger hint, camera, inspiration, task — up to its final step, where pressing 提交审核 stays a user click, phone preview QR codes, binding received creator tasks or inspirations), read the signed-in account's inspirations and tasks (collect inspirations, receive tasks) and the mobile app's rank boards, use Douyin music, open/create/close project windows, and remove objects together with resources only they used. It works through a small editor plugin that exposes a token-protected RPC on 127.0.0.1 inside each project window. Relies on editor internals (verified on 9.7.2); `ext_status` reports any missing internals. Install with `npm ci && node scripts/install.mjs`, then register `node src/server.mjs` as a stdio MCP server.
 
 Licensed under [MIT](LICENSE). Not affiliated with or endorsed by ByteDance / Douyin; all product names and trademarks belong to their owners. The repository contains no editor code or assets. Official assets and homepage works accessed through this tool belong to 像塑 or their creators and are subject to the platform's terms; use downloaded works for learning only, delete them with works_cleanup when done, and do not redistribute them.

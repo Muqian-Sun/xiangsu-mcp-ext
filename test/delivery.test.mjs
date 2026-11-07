@@ -286,17 +286,17 @@ test('effect_check only opens the 特效检测 window, listening first, and maps
   assert.equal(out.result, 'timeout');
 });
 
-test('submit_prepare opens the submit window through the toolbar entry only after the local checks pass', async () => {
+test('submit_prepare checks its arguments and does not open the submit window when the local checks fail', async () => {
   const bad = setup({ loggedIn: false });
-  const refused = await bad.lib.submitPrepare();
+  bad.modules[M.webWindow] = { EHWebWindow: class {} };
+  bad.modules[M.webWindow].EHWebWindow.prototype.showWindow = () => {};
+  const refused = await bad.lib.submitPrepare({ name: '名字' });
   assert.equal(refused.opened, false);
+  assert.ok(refused.check.issues.some((i) => i.startsWith('NOT_LOGGED_IN')));
   assert.ok(!bad.business.emitted.includes('SubmitEffect'));
-  const good = setup();
-  fs.mkdirSync(path.join(good.projectDir, 'Icon'));
-  fs.writeFileSync(path.join(good.projectDir, 'Icon/commonIcon.png'), 'x');
-  const out = await good.lib.submitPrepare();
-  assert.equal(out.opened, true);
-  assert.deepEqual(good.business.emitted, ['SubmitEffect']);
+  await assert.rejects(bad.lib.submitPrepare({}), /INVALID_NAME/);
+  await assert.rejects(bad.lib.submitPrepare({ name: 'a', camera: 'side' }), /INVALID_CAMERA: side/);
+  await assert.rejects(bad.lib.submitPrepare({ name: 'a', task_track: '赛道' }), /INVALID_TASK/);
 });
 
 test('mobile_preview exports like the toolbar popup and returns the QR text it would show', async () => {
@@ -405,6 +405,34 @@ test('icon_set prepares the image, hands the PNG to the plugin and always remove
   const failed = await client.callTool({ name: 'icon_set', arguments: { project_path: '/p', image_path: '/img.jpg', type: 'male' } });
   assert.equal(failed.isError, true);
   assert.equal(fs.existsSync(dir), false);
+});
+
+test('submit_prepare needs a name, sets icon_image first and passes the rest to the plugin', async () => {
+  const seen = [];
+  const client = await connect({
+    listInstances: () => [{ pid: 7 }],
+    prepareIcon: async () => {
+      const dir = tmpdir('xs-prep-');
+      fs.writeFileSync(path.join(dir, 'icon.png'), 'p');
+      return { png: path.join(dir, 'icon.png'), dir };
+    },
+    callPlugin: async (method, params, opts) => (seen.push([method, params, opts]), { method }),
+  });
+  const missing = await client.callTool({ name: 'submit_prepare', arguments: { project_path: '/p' } });
+  assert.equal(missing.isError, true);
+  assert.deepEqual(seen, []);
+  const fill = { name: '名字', trigger_hint: '张嘴', camera: 'back', inspiration: '灵感', task: '任务', task_track: '赛道' };
+  assert.deepEqual(json(await client.callTool({ name: 'submit_prepare', arguments: { project_path: '/p', ...fill } })), { method: 'submit_prepare' });
+  assert.deepEqual(seen, [['submit_prepare', fill, { projectPath: '/p', timeoutMs: 360000 }]]);
+  seen.length = 0;
+  await client.callTool({ name: 'submit_prepare', arguments: { project_path: '/p', name: '名字', icon_image: '/img.jpg' } });
+  assert.deepEqual(
+    seen.map(([m, p]) => [m, m === 'icon_set' ? p.types : p]),
+    [
+      ['icon_set', ['female', 'male']],
+      ['submit_prepare', { name: '名字' }],
+    ],
+  );
 });
 
 test('effect_check makes the single cloud check call, with an RPC timeout longer than the wait', async () => {
