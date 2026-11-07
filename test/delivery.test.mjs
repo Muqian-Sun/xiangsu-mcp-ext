@@ -32,10 +32,10 @@ class Bus {
 }
 
 // A fake editor with one open project and the delivery and music modules.
-function setup({ size = 1000, maxSize = 5000, sameAsTemplate = false, effectIdOk = true, loggedIn = true, remote = 0, perfStatus, openWindow = true, mobileResponse } = {}) {
+function setup({ size = 1000, maxSize = 5000, sameAsTemplate = false, effectIdOk = true, loggedIn = true, remote = 0, perfStatus, openWindow = true, mobileResponse, iconUploadOk = true } = {}) {
   const projectDir = tmpdir('xs-proj-');
   const instance = tmpdir('xs-inst-');
-  const calls = { exportDirs: [], imported: [], exist: [], savedJson: 0, iconWindow: [], showPerf: 0, cookie: 0, uploaded: [], applied: [], sdkMapping: 0, exportOpts: [], iconDeleted: [] };
+  const calls = { exportDirs: [], imported: [], exist: [], savedJson: 0, iconWindow: [], showPerf: 0, cookie: 0, uploaded: [], applied: [], sdkMapping: 0, exportOpts: [], iconDeleted: [], iconSteps: [] };
   const business = new Bus();
   const legacy = new Bus();
   business.on('SubmitEffect', () => openWindow && legacy.emit('OnSubmitWindowOpened', 1, size));
@@ -68,8 +68,13 @@ function setup({ size = 1000, maxSize = 5000, sameAsTemplate = false, effectIdOk
     setIconExistState(t, v) {
       calls.exist.push([t, v]);
     }
+    updateIcon(t, v) {
+      this.state[t] = { ...this.state[t], ...v };
+      calls.iconSteps.push(['update', t, v]);
+    }
     saveIconJson() {
       calls.savedJson += 1;
+      calls.iconSteps.push(['save', JSON.parse(JSON.stringify(this.state))]);
     }
     isIconCreated(t) {
       return this.created.has(t);
@@ -85,6 +90,16 @@ function setup({ size = 1000, maxSize = 5000, sameAsTemplate = false, effectIdOk
   }
   const icons = new IconPreviewManager();
   icons.created = new Set();
+  // A project whose icons were uploaded before: their uri names the old images.
+  icons.state = { 0: { iconUri: 'old-female' }, 1: { iconUri: 'old-male' } };
+  const iconUpload = {
+    async uploadIcon() {
+      calls.iconSteps.push(['upload', [...icons.created].sort()]);
+      if (!iconUploadOk) return false;
+      for (const t of icons.created) icons.state[t] = { ...icons.state[t], iconUri: `uri-${t}` };
+      return true;
+    },
+  };
   const submissionApi = {
     maxEffectPackageSize: maxSize,
     checkEffectIdConsistency: () => effectIdOk,
@@ -111,6 +126,7 @@ function setup({ size = 1000, maxSize = 5000, sameAsTemplate = false, effectIdOk
       },
     },
     [M.iconPreview]: { iconTypeToProjectIconPathMap: iconMap, IconPreviewManager },
+    [M.iconUpload]: { default: iconUpload },
     [M.iconWindow]: { showIconCreationWindow: (from) => calls.iconWindow.push(from) },
     [M.submission]: { EffectSubmissionAPIKey: 'submitKey' },
     [M.perfTest]: { PerfTestAPIKey: 'perfKey' },
@@ -171,29 +187,47 @@ function setup({ size = 1000, maxSize = 5000, sameAsTemplate = false, effectIdOk
 
 const leftovers = (instance) => fs.readdirSync(instance);
 
-test('icon_set writes the female and male slots by default and reloads the editor icon state', () => {
+test('icon_set writes the female and male slots by default, uploads them and reloads the editor icon state', async () => {
   const { lib, calls, projectDir } = setup();
   const png = path.join(tmpdir('xs-png-'), 'i.png');
   fs.writeFileSync(png, 'PNGDATA');
-  const out = lib.iconSet({ png_path: png });
+  const out = await lib.iconSet({ png_path: png });
   assert.deepEqual(out.icon_paths, [path.join(projectDir, 'Icon/femaleIcon.png'), path.join(projectDir, 'Icon/maleIcon.png')]);
   for (const f of out.icon_paths) assert.equal(fs.readFileSync(f, 'utf8'), 'PNGDATA');
   assert.deepEqual(calls.imported, [[0, projectDir], [1, projectDir]]);
   assert.deepEqual(calls.exist, [[0, true], [1, true]]);
   assert.equal(calls.savedJson, 1);
+  assert.equal(out.uploaded, true);
   assert.deepEqual(out.project_icons, ['female', 'male']);
   assert.deepEqual(out.removed, []);
-  const common = lib.iconSet({ png_path: png, types: ['common'] });
+  assert.deepEqual(
+    calls.iconSteps.map((s) => s[0]),
+    ['update', 'update', 'upload', 'save'],
+    'old uris are dropped before the upload, and the icon info is saved after it',
+  );
+  assert.deepEqual(calls.iconSteps[2][1], [0, 1]);
+  assert.deepEqual(calls.iconSteps[3][1], { 0: { iconUri: 'uri-0' }, 1: { iconUri: 'uri-1' } });
+  const common = await lib.iconSet({ png_path: png, types: ['common'] });
   assert.ok(fs.existsSync(path.join(projectDir, 'Icon/commonIcon.png')));
   assert.deepEqual(common.removed, ['female', 'male']);
   assert.deepEqual(common.project_icons, ['common']);
   assert.deepEqual(calls.iconDeleted, [['dirty', 0], ['delete', 0], ['dirty', 1], ['delete', 1]]);
-  const back = lib.iconSet({ png_path: png });
+  const back = await lib.iconSet({ png_path: png });
   assert.deepEqual(back.removed, ['common']);
   assert.deepEqual(back.project_icons, ['female', 'male']);
-  assert.throws(() => lib.iconSet({ png_path: png, types: ['kid'] }), /INVALID_ICON_TYPE: kid/);
-  assert.throws(() => lib.iconSet({ png_path: png, types: [] }), /INVALID_ICON_TYPE/);
-  assert.throws(() => lib.iconSet({ png_path: '/nope.png' }), /ICON_FILE_NOT_FOUND/);
+  await assert.rejects(lib.iconSet({ png_path: png, types: ['kid'] }), /INVALID_ICON_TYPE: kid/);
+  await assert.rejects(lib.iconSet({ png_path: png, types: [] }), /INVALID_ICON_TYPE/);
+  await assert.rejects(lib.iconSet({ png_path: '/nope.png' }), /ICON_FILE_NOT_FOUND/);
+});
+
+test('icon_set fails when the upload does not go through and keeps no uri of the old icon', async () => {
+  const { lib, calls } = setup({ iconUploadOk: false });
+  const png = path.join(tmpdir('xs-png-'), 'i.png');
+  fs.writeFileSync(png, 'PNGDATA');
+  await assert.rejects(lib.iconSet({ png_path: png }), /ICON_UPLOAD_FAILED/);
+  const saved = calls.iconSteps.find((s) => s[0] === 'save');
+  assert.ok(saved, 'the icon info is still saved');
+  assert.deepEqual(JSON.parse(JSON.stringify(saved[1])), { 0: {}, 1: {} });
 });
 
 test('icon_open opens the icon creation window', () => {
