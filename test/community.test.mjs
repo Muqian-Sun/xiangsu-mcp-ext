@@ -398,7 +398,6 @@ test('tasks_list merges activities and effect tasks, and prepares launch extras 
     can_finish_times: -1,
     released_at: new Date(1793977780000).toISOString(),
     offline_at: new Date(1797350400000).toISOString(),
-    template_count: 2,
     icon_url: 'https://cdn/t.png',
   });
   assert.deepEqual({ received: effect.items[2].received, bindable: effect.items[2].bindable, status: effect.items[2].status }, { received: true, bindable: true, status: 'WAIT_SUBMIT' });
@@ -463,7 +462,6 @@ test('task_detail reads an effect task like the task window and a growth task wi
     reward_end: '12月31日',
     offline_at: new Date(1797350400000).toISOString(),
     can_finish_times: -1,
-    template_ids: ['7408401210929053711', '7411422748410609714'],
     content: [{ type: 3, contentBlockName: '参与要求', demandList: [{ tit: '主题要求', desc: '年轻美妆' }] }],
   });
   const growth = await lib.taskDetail({ kind: 'growth', id: 'headdress_decoration' });
