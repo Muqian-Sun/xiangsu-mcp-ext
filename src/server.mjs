@@ -20,6 +20,7 @@ import { loadScene } from './scenefile.mjs';
 import { makeupLayers } from './makeup.mjs';
 import { cropImage, framesDir, resizeImage } from './frames.mjs';
 import { DOWNLOAD_TTL_MS, Downloads, checkTarget, copyProject, editorRoot, outlineProject } from './works.mjs';
+import { QrCodes } from './qrcodes.mjs';
 
 const VERSION = '0.5.0';
 
@@ -40,6 +41,10 @@ const RESET_TIMEOUT_MS = 20000;
 const HOLD_SLACK_MS = 30000;
 // The official screenshot's size: it scales the preview down to 320×569.
 const OFFICIAL_SHOT_SIDE = 569;
+// Measured: the preview service answers ttl 604800 (a week); used when an answer carries no ttl.
+const QR_TTL_SEC = 604800;
+// Picked: the expiry timer fires this long after the code expires, so the clock has surely passed it.
+const QR_PRUNE_SLACK_MS = 1000;
 // Picked, not measured: as many images per image_view call as the old preview tools showed.
 const IMAGE_VIEW_MAX = 8;
 // Derived: the SDK's stdio transport drops a message over 10 MiB and with it the connection, and six
@@ -104,6 +109,8 @@ export function createServer(deps = {}) {
     resizeImage,
     framesDir,
     qrPng: (text) => QRCode.toBuffer(text, { width: 360, margin: 2 }),
+    // Expiry timers must not keep the process alive after the client goes away.
+    schedule: (fn, ms) => setTimeout(fn, ms).unref(),
     sleep,
     openTimeoutMs: 90000,
     closeTimeoutMs: 30000,
@@ -116,6 +123,8 @@ export function createServer(deps = {}) {
   d.official.onToolsChanged = () => server.sendToolListChanged().catch(() => {});
   const projects = new Projects(d);
   d.downloads = d.downloads ?? new Downloads();
+  d.qrCodes = d.qrCodes ?? new QrCodes();
+  d.qrCodes.prune();
   // Library assets and homepage works seen in this session, kept here rather than in a window:
   // windows open and close while an agent works, and a later apply or download may be served by a
   // different one. The plugin returns raw records next to the slim items; clients only see the slim ones.
@@ -462,15 +471,20 @@ export function createServer(deps = {}) {
     {
       name: 'mobile_preview',
       description:
-        '手机预览：按工具栏「手机预览」的方式打包当前工程并上传到抖音的预览服务，返回和编辑器弹出的一样的二维码图片（及其文本、有效期），用抖音 App 扫码即可在真机上看效果。会把特效包上传到抖音服务器；内容审核不通过时报 MOBILE_PREVIEW_MODERATION_FAILED。',
+        '手机预览：按工具栏「手机预览」的方式打包当前工程并上传到抖音的预览服务，返回和编辑器弹出的一样的二维码图片（及其文本、有效期），用抖音 App 扫码即可在真机上看效果。二维码同时存成文件 qr_file，可直接给用户扫，不要另存到别处：到期（expires_at，一般 7 天）后自动删除。会把特效包上传到抖音服务器；内容审核不通过时报 MOBILE_PREVIEW_MODERATION_FAILED。',
       shape: { ...target },
       run: async (a) => {
         const projectPath = await projects.resolveProjectPath(a);
         const res = await d.callPlugin('mobile_preview', {}, { projectPath, timeoutMs: 300000 });
         const png = await d.qrPng(res.qr_text);
+        const ttlMs = (res.expires_in_sec ?? QR_TTL_SEC) * 1000;
+        const expiresAt = d.qrCodes.now() + ttlMs;
+        d.qrCodes.prune();
+        const qr_file = d.qrCodes.save(png, { project: path.basename(res.project_path), expiresAt });
+        d.schedule(() => d.qrCodes.prune(), ttlMs + QR_PRUNE_SLACK_MS);
         return {
           content: [
-            { type: 'text', text: JSON.stringify(res, null, 2) },
+            { type: 'text', text: JSON.stringify({ ...res, qr_file, expires_at: new Date(expiresAt).toISOString() }, null, 2) },
             { type: 'image', data: png.toString('base64'), mimeType: 'image/png' },
           ],
         };
