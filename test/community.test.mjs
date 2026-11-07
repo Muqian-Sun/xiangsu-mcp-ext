@@ -264,6 +264,22 @@ test('community requests fail on server codes, HTTP errors and non-JSON bodies',
   await assert.rejects(html.lib.rankSubjects({}), /GET_SUBJECTS_FAILED: response is not JSON/);
 });
 
+test('reads retry once on the busy code 1; writes and other codes are not retried', async () => {
+  const busy = JSON.stringify({ code: 1, message: '网络开小差了' });
+  const flaky = setup({ 'GET /cam_api/task/v1/growth_task_detail': (call, calls) => (calls.length === 1 ? busy : ok(GROWTH_TASKS.growth_tasks[0])) });
+  assert.equal((await flaky.lib.taskDetail({ kind: 'growth', id: 'headdress_decoration' })).title, '学会制作1款头饰装饰特效');
+  assert.equal(flaky.to('/cam_api/task/v1/growth_task_detail').length, 2);
+  const down = setup({ 'GET /cam_api/task/v1/growth_task_detail': busy });
+  await assert.rejects(down.lib.taskDetail({ kind: 'growth', id: 'headdress_decoration' }), /GET_GROWTH_TASK_FAILED: code=1 message=网络开小差了/);
+  assert.equal(down.to('/cam_api/task/v1/growth_task_detail').length, 2);
+  const bad = setup({ 'GET /cam_api/rank/v1/detail': JSON.stringify({ code: 400, message: '参数错误' }) });
+  await assert.rejects(bad.lib.rankList({}), /code=400/);
+  assert.equal(bad.to('/cam_api/rank/v1/detail').length, 1);
+  const write = setup({ 'POST /creator/v1/receive_task': busy });
+  await assert.rejects(write.lib.taskReceive({ item_id: '108116' }), /RECEIVE_TASK_FAILED: code=1/);
+  assert.equal(write.to('/creator/v1/receive_task').length, 1);
+});
+
 test('inspiration_list checks the tab, sends flag 1 for the first page and 2 after, and slims items', async () => {
   const { lib, to } = setup();
   const out = await lib.inspirationList({});
