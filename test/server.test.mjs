@@ -12,6 +12,8 @@ import { fetchImage, readImageFile } from '../src/images.mjs';
 
 const OWN = [
   'effect_check',
+  'effect_reviews',
+  'effects_mine',
   'ext_status',
   'face_warp_list',
   'face_warp_set_intensity',

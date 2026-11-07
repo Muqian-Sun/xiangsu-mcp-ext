@@ -36,6 +36,10 @@ const SUBJECT_KINDS = { effect: 1, template: 2 };
 const SUBJECT_MAX = 20;
 // The editor's task window page reads task details with this mobile app version.
 const TASK_PAGE_APP_VERSION = '11.3.0';
+// Statuses the effect list page colours as failures (its 审核未通过, 测试未通过, 申诉审核未通过).
+const FAILED_STATUSES = [101, 112, 119];
+// The review record page's review types: 上线审核 and 精选审核.
+const REVIEW_TYPES = { online: 1, innovation: 2 };
 // The server's 「网络开小差了」 code, seen once on a growth task detail that the next three tries
 // returned; reads are retried once on it. The wait is picked, not measured (works search uses the same).
 const BUSY_CODE = '1';
@@ -204,6 +208,66 @@ function slimSubject(s) {
       icon_url: e.effect_icon || null,
       description: e.effect_desc || '',
     })),
+  };
+}
+
+// Review texts mark up segments between `|`: <b>bold<b>, <mark>…<mark>, <br>… and
+// <a><href>url<href>label<a>, read the way the review record page reads them.
+function readMarkup(src) {
+  const links = [];
+  const parts = String(src || '')
+    .split('|')
+    .map((seg) => {
+      if (seg.startsWith('<a>')) {
+        const body = seg.replace(/<a>/g, '');
+        const m = /<href>(.*)<href>(.*)/.exec(body);
+        if (!m) return body;
+        links.push({ text: m[2], url: m[1] });
+        return m[2];
+      }
+      if (seg.startsWith('<b>')) return seg.replace(/<b>/g, '');
+      if (seg.startsWith('<mark>')) return seg.replace(/<mark>/g, '');
+      if (seg.startsWith('<br>')) return `\n${seg.replace(/<br>/g, '')}`;
+      return seg;
+    });
+  return { text: parts.join('').trim(), links };
+}
+
+function slimReview(r) {
+  const desc = readMarkup(r.detail_desc);
+  const links = [...desc.links];
+  const reasons = (r.refuse_reason || []).map((x) => {
+    const detail = readMarkup(x.detail);
+    links.push(...detail.links);
+    return { title: x.title || '', items: x.content || [], detail: detail.text };
+  });
+  return { title: r.title || '', at: iso(r.created_at), text: desc.text, refuse_reasons: reasons, links };
+}
+
+function reviewList(data, what) {
+  if (data === undefined || data === null) return [];
+  if (!Array.isArray(data)) throw Error(`${what}_FAILED: expected a list of review records`);
+  return data.map(slimReview);
+}
+
+function slimArtwork(e) {
+  return {
+    effect_id: String(e.id),
+    name: e.name,
+    status: e.effect_status,
+    status_text: e.effect_status_desc || null,
+    created_at: iso(Number(e.created_at)),
+    online_at: iso(Number(e.first_online_at)),
+    app_effect_id: appEffectId(e),
+    task: e.b_task || null,
+    inspiration: e.b_ins || null,
+    hotspot: e.b_hot || null,
+    can_edit: !!e.can_edit,
+    can_delete: !!e.can_delete,
+    can_appeal: !!e.can_appeal,
+    appeal_types: (e.appeal_types || []).map((t) => t.appeal_type_text),
+    pub_count: e.pub_num ?? null,
+    icon_url: e.icon || null,
   };
 }
 
@@ -569,6 +633,49 @@ const methods = {
     // offset counts the server's entries before it filters a page, so a page can hold fewer than `count`.
     return { kind, date: d.date || null, total: d.total, items, next_offset: offset + count, has_more: !!d.has_more };
   },
+
+  // The 上线审核 records of the review record page: review_nodes when it has them, otherwise effect_reviews.
+  async onlineReviews(id) {
+    const nodes = await send(this, 'GET_REVIEW_NODES', '/cam_api/effect/v1/review_nodes', { query: { effect_id: id, review_type: REVIEW_TYPES.online } });
+    if (nodes.code === '0' && nodes.data) return reviewList(nodes.data, 'GET_REVIEW_NODES');
+    return reviewList(await request(this, 'GET_EFFECT_REVIEWS', '/effectcam/v1/effect_reviews', { query: { effect_id: id } }), 'GET_EFFECT_REVIEWS');
+  },
+
+  // The mobile app's 作品 list, newest first. Pages chain through the `sort` key each page returns.
+  async effectsMine({ cursor, count = 20 } = {}) {
+    const d = await request(this, 'GET_MY_EFFECTS', '/effectcam/v1/artworks', { query: { count, sort: cursor } });
+    const effects = d.effects || [];
+    const items = await Promise.all(
+      effects.map(async (e) => {
+        const item = slimArtwork(e);
+        if (FAILED_STATUSES.includes(e.effect_status)) item.review = (await this.onlineReviews(item.effect_id))[0] ?? null;
+        return item;
+      }),
+    );
+    // A short page is the last; a full last page still hands out a key, whose page comes back empty.
+    const next = effects.length === count && d.sort ? d.sort : null;
+    return { total: d.total, items, next_cursor: next, has_more: next !== null };
+  },
+
+  async effectReviews({ effect_id } = {}) {
+    const id = requireId(effect_id, 'INVALID_EFFECT_ID');
+    const [detail, online, innovation] = await Promise.all([
+      request(this, 'GET_EFFECT_DETAIL', '/effectcam/v2/effect_detail', { query: { effect_id: id } }),
+      this.onlineReviews(id),
+      request(this, 'GET_REVIEW_NODES', '/cam_api/effect/v1/review_nodes', { query: { effect_id: id, review_type: REVIEW_TYPES.innovation } }),
+    ]);
+    // Effects of other accounts and unknown ids are refused with code 1301 before this.
+    const { base, extra = {} } = detail;
+    return {
+      effect_id: id,
+      name: base.name,
+      status: base.effect_status,
+      status_text: base.effect_status_desc || null,
+      task: extra.b_task || null,
+      reviews: online,
+      innovation_reviews: reviewList(innovation, 'GET_REVIEW_NODES'),
+    };
+  },
 };
 
 const METHODS = {
@@ -586,6 +693,8 @@ const METHODS = {
   rank_subjects: 'rankSubjects',
   rank_creators_month: 'rankCreatorsMonth',
   rank_innovation_picks: 'rankInnovationPicks',
+  effects_mine: 'effectsMine',
+  effect_reviews: 'effectReviews',
 };
 
 module.exports = { methods, METHODS, PICK_KINDS, SUBJECT_KINDS };
