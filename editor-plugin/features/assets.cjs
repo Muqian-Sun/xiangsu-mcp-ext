@@ -121,6 +121,22 @@ const REQUIRED = {
     [M.preview, 'PreviewManager.prototype.cacheCurrentFrame'],
     [M.preview, 'PreviewManager.prototype.captureScreenshotToMemory'],
   ],
+  previewReset: [
+    [M.ef, 'PreviewSyncer.getInstance'],
+    [M.ef, 'PreviewSyncer.addListener'],
+    [M.ef, 'PreviewSyncer.removeListener'],
+    [M.events, 'BusinessEventManager.TypeGuard'],
+  ],
+  previewFullRate: [
+    [M.preview, 'PreviewManager.getInstance'],
+    [M.preview, 'PreviewManager.prototype.isRecording'],
+    [M.backgroundMode, 'BackgroundModeManager.getInstance'],
+    [M.backgroundMode, 'BackgroundModeManager.prototype.setRecordingMode'],
+  ],
+  previewWindow: [
+    [M.orionui, 'WindowState.Minimized'],
+    [M.editWindow, 'EditWindowController.getInstance'],
+  ],
 };
 
 // Plain asset lists, 素材广场 and 收藏 can be applied; AI generation panels (妆容/图片/视频/实时变脸 UGC)

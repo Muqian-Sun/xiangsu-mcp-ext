@@ -18,7 +18,7 @@ import { prepareIcon } from './icons.mjs';
 import { formatObjects, formatTree, pickInspect, resolveRefs } from './inspect.mjs';
 import { loadScene } from './scenefile.mjs';
 import { makeupLayers } from './makeup.mjs';
-import { cropImage, framesDir } from './frames.mjs';
+import { cropImage, framesDir, resizeImage } from './frames.mjs';
 import { DOWNLOAD_TTL_MS, Downloads, checkTarget, copyProject, editorRoot, outlineProject } from './works.mjs';
 
 const VERSION = '0.5.0';
@@ -33,6 +33,13 @@ const saveTo = z.string().min(1).optional().describe('另存到这个目录（�
 // each, measured) keep one answer at about 1.8 MB of images.
 const MAX_FRAME_VIDEOS = 4;
 const MAX_FRAMES = 24;
+// Derived: the plugin's preview_reset gives up after 15 s for the reload plus 5 s for fresh frames.
+const RESET_TIMEOUT_MS = 20000;
+// Picked, not measured: on top of the reset and the frame intervals, room for the frame calls
+// (about 0.2 s each, measured) and the next video switch before the hold is renewed.
+const HOLD_SLACK_MS = 30000;
+// The official screenshot's size: it scales the preview down to 320×569.
+const OFFICIAL_SHOT_SIDE = 569;
 
 function saveDir(dir) {
   if (!path.isAbsolute(dir)) throw Error(`SAVE_TO_NOT_ABSOLUTE: ${dir}`);
@@ -89,6 +96,7 @@ export function createServer(deps = {}) {
     openWithApp,
     prepareIcon,
     cropImage,
+    resizeImage,
     framesDir,
     qrPng: (text) => QRCode.toBuffer(text, { width: 360, margin: 2 }),
     sleep,
@@ -110,6 +118,12 @@ export function createServer(deps = {}) {
   const seenWorks = new Seen('UNKNOWN_WORK', 'works_list, works_search or works_by_effect');
   const seenTasks = new Seen('UNKNOWN_TASK', 'tasks_list', 'task_id');
   const seenMusic = new Seen('UNKNOWN_MUSIC', 'music_list', 'music_id');
+
+  // Background windows draw at 6 fps; the plugin holds full rate until released, or by itself until
+  // hold_ms runs out if the release never arrives.
+  const holdFullRate = (projectPath, hold_ms) => d.callPlugin('preview_full_rate', { hold_ms }, { projectPath, timeoutMs: 15000 });
+  const releaseFullRate = (projectPath) => holdFullRate(projectPath, 0).catch(() => {});
+  const resetPreview = (projectPath) => d.callPlugin('preview_reset', {}, { projectPath, timeoutMs: RESET_TIMEOUT_MS + 5000 });
 
   // Forwards to the plugin window showing the target project.
   const plugin = (method, timeoutMs) => async (args) => {
@@ -781,7 +795,7 @@ export function createServer(deps = {}) {
     {
       name: 'preview_frames',
       description:
-        '按时间连续截取预览画面，分辨率是预览本身的（720×1280，官方截图是缩小后的 320×569）：默认先重置预览，再每隔 interval_ms 截一张，共 count 张（一次最多 24 张），用来看动态效果、摇头时的侧脸等。videos 可依次换几个预览视频各截一组（名称取自 list_preview_videos，如 preview_single_shake_head||女），全部截完切回原视频；切换会让工程变成「已修改」，之后需要 save_project。crop 按画面比例（0–1）裁出局部，如脸部。每帧都存成文件并随结果返回，files 里是路径，可直接贴给用户看；默认存在临时目录、24 小时后删除，save_to（目录的绝对路径）则存到那里长期保留。每帧注明实际截取时刻（相对重置后的毫秒数）。',
+        '按时间连续截取预览画面，分辨率是预览本身的（720×1280，官方截图是缩小后的 320×569），取自预览的渲染结果，窗口在后台或最小化时也能截（截图期间临时恢复正常帧率）：默认先重置预览、等到重载后的画面出来，再每隔 interval_ms 截一张，共 count 张（一次最多 24 张），用来看动态效果、摇头时的侧脸等。videos 可依次换几个预览视频各截一组（名称取自 list_preview_videos，如 preview_single_shake_head||女），全部截完切回原视频；切换会让工程变成「已修改」，之后需要 save_project。crop 按画面比例（0–1）裁出局部，如脸部。每帧都存成文件并随结果返回，files 里是路径，可直接贴给用户看；默认存在临时目录、24 小时后删除，save_to（目录的绝对路径）则存到那里长期保留。每帧注明实际截取时刻（相对重置完成的毫秒数）。',
       shape: {
         ...target,
         count: z.number().int().min(1).max(12).optional().describe('每个视频截几张，默认 4。'),
@@ -809,10 +823,8 @@ export function createServer(deps = {}) {
         const dir = save_to ? saveDir(save_to) : d.framesDir();
         const frame = (name) => d.callPlugin('preview_frame', {}, { projectPath, timeoutMs: 15000 }).then((img) => ({ name, img }));
         const shoot = async (prefix) => {
-          if (reset) {
-            const r = await d.official.callJson('interact_by_dsl', { instance_id, commands: [{ command_type: 'reset_preview', params: {} }], intention: '重置预览后连续截图' });
-            if (!r.success) throw Error(`RESET_PREVIEW_FAILED: ${JSON.stringify(r.results)}`);
-          }
+          await holdFullRate(projectPath, RESET_TIMEOUT_MS + count * interval_ms + HOLD_SLACK_MS);
+          if (reset) await resetPreview(projectPath);
           const t0 = Date.now();
           const shots = [];
           for (let i = 0; i < count; i++) {
@@ -824,19 +836,23 @@ export function createServer(deps = {}) {
         };
         const groups = [];
         let original = null;
-        if (videos) {
-          original = await d.official.callJson('get_current_preview_video', { instance_id, intention: '记下当前预览视频，截图后切回' });
-          try {
-            for (const [k, video_name] of videos.entries()) {
-              await d.official.callJson('set_preview_video', { instance_id, tracking_type, video_name, intention: '临时切换预览视频截图' });
-              groups.push({ video: video_name, shots: await shoot(`v${k + 1}-`) });
+        try {
+          if (videos) {
+            original = await d.official.callJson('get_current_preview_video', { instance_id, intention: '记下当前预览视频，截图后切回' });
+            try {
+              for (const [k, video_name] of videos.entries()) {
+                await d.official.callJson('set_preview_video', { instance_id, tracking_type, video_name, intention: '临时切换预览视频截图' });
+                groups.push({ video: video_name, shots: await shoot(`v${k + 1}-`) });
+              }
+            } finally {
+              const back = original.video_name ? { video_name: original.video_name } : { resource_url: original.resource_url };
+              await d.official.callJson('set_preview_video', { instance_id, tracking_type: original.tracking_type, ...back, intention: '截图后切回原预览视频' });
             }
-          } finally {
-            const back = original.video_name ? { video_name: original.video_name } : { resource_url: original.resource_url };
-            await d.official.callJson('set_preview_video', { instance_id, tracking_type: original.tracking_type, ...back, intention: '截图后切回原预览视频' });
+          } else {
+            groups.push({ video: null, shots: await shoot('') });
           }
-        } else {
-          groups.push({ video: null, shots: await shoot('') });
+        } finally {
+          await releaseFullRate(projectPath);
         }
         const files = [];
         const content = [];
@@ -926,6 +942,39 @@ export function createServer(deps = {}) {
   ];
   const own = new Map(tools.map((t) => [t.name, { ...t, schema: z.strictObject(t.shape) }]));
 
+  // Official tools listed unchanged whose calls are partly served here.
+  const intercepted = {
+    // Since 9.8.1 the official screenshot photographs the window's preview area, which is black while
+    // the window is minimized or hidden. Then the frame comes from the render output instead, scaled
+    // to the official size.
+    capture_preview: async (args) => {
+      let projectPath;
+      let win;
+      try {
+        projectPath = await projects.resolveProjectPath({ instance_id: args.instance_id });
+        win = await d.callPlugin('preview_window', {}, { projectPath, timeoutMs: 5000 });
+      } catch (e) {
+        const res = await d.official.callTool('capture_preview', args);
+        if (res.isError) return res;
+        return { ...res, content: [...res.content, { type: 'text', text: `未能检查窗口是否可见（${e.message}），以上是官方截图；窗口最小化时它是黑的` }] };
+      }
+      if (win.visible) return d.official.callTool('capture_preview', args);
+      let img;
+      try {
+        await holdFullRate(projectPath, RESET_TIMEOUT_MS + HOLD_SLACK_MS);
+        await resetPreview(projectPath);
+        img = await d.callPlugin('preview_frame', {}, { projectPath, timeoutMs: 15000 });
+      } finally {
+        await releaseFullRate(projectPath);
+      }
+      const file = path.join(d.framesDir(), 'capture_preview.jpg');
+      fs.writeFileSync(file, Buffer.from(img.data, 'base64'));
+      await d.resizeImage(file, OFFICIAL_SHOT_SIDE);
+      const note = `窗口${win.minimized ? '最小化了' : '不可见'}，官方截图会是黑的；这张已重置预览，取自预览的渲染结果（不含「选择音乐」、拍摄按钮等界面元素）`;
+      return { content: [{ type: 'text', text: JSON.stringify({ success: true, status: 'success', source: 'render_output', note }, null, 2) }, { type: 'image', ...(await d.readImageFile(file)) }] };
+    },
+  };
+
   server.setRequestHandler(ListToolsRequestSchema, async () => {
     const mine = [...own.values()].map((t) => ({ name: t.name, description: t.description, inputSchema: z.toJSONSchema(t.schema) }));
     const official = (await d.official.listTools()).filter((t) => !own.has(t.name));
@@ -940,6 +989,13 @@ export function createServer(deps = {}) {
       if (!parsed.success) return failure(`INVALID_ARGUMENTS(${name}): ${parsed.error.issues.map((i) => `${i.path.join('.') || '(root)'} ${i.message}`).join('; ')}`);
       try {
         return await t.run(parsed.data);
+      } catch (e) {
+        return failure(e);
+      }
+    }
+    if (Object.prototype.hasOwnProperty.call(intercepted, name)) {
+      try {
+        return await intercepted[name](args);
       } catch (e) {
         return failure(e);
       }
