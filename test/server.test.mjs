@@ -17,17 +17,17 @@ const OWN = [
   'face_warp_set_intensity',
   'icon_open',
   'icon_set',
+  'image_view',
   'inspect_many',
   'inspiration_bind',
   'inspiration_collect',
   'inspiration_detail',
   'inspiration_list',
   'inspiration_nav',
-  'inspiration_preview',
   'library_apply',
+  'library_images',
   'library_list',
   'library_nav',
-  'library_preview',
   'library_search',
   'makeup_layers',
   'menu_add',
@@ -61,7 +61,6 @@ const OWN = [
   'works_list',
   'works_nav',
   'works_open',
-  'works_preview',
   'works_search',
 ];
 
@@ -156,47 +155,71 @@ test('invalid arguments are rejected before reaching the plugin', async () => {
   assert.deepEqual(seen, []);
 });
 
-test('library_preview and menu_preview return a caption and an image per item, isolating failures', async () => {
+test('image_view shows URLs and local files with a caption each, isolating failures', async () => {
+  const fetched = [];
   const { client } = await connect({
     official: fakeOfficial(),
-    callPlugin: async (method) =>
-      method === 'library_search'
-        ? {
-            query: 'x',
-            items: [
-              { template_id: '1', title: '芒果脸', cover_url: 'https://ok' },
-              { template_id: '2', title: '无图', cover_url: null },
-              { template_id: '3', title: '坏图', cover_url: 'https://bad' },
-            ],
-            raw: [{ templateId: '1' }, { templateId: '2' }, { templateId: '3' }],
-          }
-        : [
-            { menu_id: 'smokey', name: '烟熏妆', description: '一键烟熏妆', image_url: null, image_file: '/hover/smokey.png' },
-            { menu_id: 'x', name: '无图项', description: '', image_url: null, image_file: null },
-          ],
+    callPlugin: async () => ({}),
     fetchImage: async (url) => {
+      fetched.push(url);
       if (url === 'https://bad') throw Error('HTTP 404');
       return { data: 'AAAA', mimeType: 'image/png' };
     },
     readImageFile: async (file) => ({ data: Buffer.from(file).toString('base64'), mimeType: 'image/gif' }),
   });
-  await client.callTool({ name: 'library_search', arguments: { query: 'x' } });
-  const lib = await client.callTool({ name: 'library_preview', arguments: { template_ids: ['1', '2', '3'] } });
-  assert.deepEqual(lib.content, [
-    { type: 'text', text: '芒果脸（template_id 1）' },
+  const res = await client.callTool({ name: 'image_view', arguments: { images: ['https://ok', 'https://bad', '/hover/smokey.png', 'blob:https://admin/x'] } });
+  assert.deepEqual(res.content, [
+    { type: 'text', text: '第 1 张：https://ok' },
     { type: 'image', data: 'AAAA', mimeType: 'image/png' },
-    { type: 'text', text: '无图（template_id 2）' },
-    { type: 'text', text: '无封面图' },
-    { type: 'text', text: '坏图（template_id 3）' },
+    { type: 'text', text: '第 2 张：https://bad' },
     { type: 'text', text: '图片读取失败：HTTP 404' },
-  ]);
-  const menu = await client.callTool({ name: 'menu_preview', arguments: { menu_ids: ['smokey', 'x'] } });
-  assert.deepEqual(menu.content, [
-    { type: 'text', text: '烟熏妆（menu_id smokey）：一键烟熏妆' },
+    { type: 'text', text: '第 3 张：/hover/smokey.png' },
     { type: 'image', data: Buffer.from('/hover/smokey.png').toString('base64'), mimeType: 'image/gif' },
-    { type: 'text', text: '无图项（menu_id x）' },
-    { type: 'text', text: '无示意图' },
+    { type: 'text', text: '第 4 张：blob:https://admin/x' },
+    { type: 'text', text: '图片读取失败：不是 http(s) 地址或绝对路径' },
   ]);
+  assert.deepEqual(fetched, ['https://ok', 'https://bad']);
+  const tooMany = await client.callTool({ name: 'image_view', arguments: { images: Array(9).fill('https://ok') } });
+  assert.equal(tooMany.isError, true);
+});
+
+test('image_view stops before the stdio message limit and lists what it left out', async () => {
+  let size = 3 * 1024 * 1024;
+  const { client } = await connect({ official: fakeOfficial(), callPlugin: async () => ({}), fetchImage: async () => ({ data: 'A'.repeat(size), mimeType: 'image/gif' }) });
+  const urls = ['https://g/1.gif', 'https://g/2.gif', 'https://g/3.gif', 'https://g/4.gif'];
+  const res = await client.callTool({ name: 'image_view', arguments: { images: urls } });
+  assert.equal(res.content.filter((c) => c.type === 'image').length, 2);
+  assert.deepEqual(JSON.parse(res.content.at(-1).text).not_returned, ['https://g/3.gif', 'https://g/4.gif']);
+  size = 9 * 1024 * 1024;
+  const one = await client.callTool({ name: 'image_view', arguments: { images: urls.slice(2) } });
+  assert.equal(one.content.filter((c) => c.type === 'image').length, 1);
+  assert.deepEqual(JSON.parse(one.content.at(-1).text).not_returned, ['https://g/4.gif']);
+});
+
+test('menu_preview and library_images return image addresses without fetching them', async () => {
+  const rows = [
+    { menu_id: 'smokey', name: '烟熏妆', description: '一键烟熏妆', image_url: null, image_file: '/hover/smokey.png' },
+    { menu_id: 'x', name: '无图项', description: '', image_url: null, image_file: null },
+  ];
+  const fetchImage = async () => assert.fail('no image may be fetched');
+  const { client } = await connect({
+    official: fakeOfficial(),
+    callPlugin: async (method) => {
+      if (method === 'menu_preview') return rows;
+      if (method === 'library_search') return { items: [{ template_id: '901', title: '萌猫造型帽子', kind: 'ai_image' }], raw: [{ templateId: '901' }] };
+      if (method === 'library_images') return [{ image_index: 0, url: 'https://img/0.png' }];
+      throw Error(`unexpected ${method}`);
+    },
+    listInstances: () => [{ pid: 1 }],
+    fetchImage,
+    readImageFile: fetchImage,
+  });
+  const menu = await client.callTool({ name: 'menu_preview', arguments: { menu_ids: ['smokey', 'x'] } });
+  assert.deepEqual(JSON.parse(menu.content[0].text), rows);
+  assert.equal(menu.content.length, 1);
+  await client.callTool({ name: 'library_search', arguments: { query: '猫' } });
+  const lib = await client.callTool({ name: 'library_images', arguments: { template_id: '901' } });
+  assert.deepEqual(JSON.parse(lib.content[0].text), { template_id: '901', title: '萌猫造型帽子', images: [{ image_index: 0, url: 'https://img/0.png' }] });
 });
 
 test('ext_status reports the official connection and each window with instance id and self check', async () => {

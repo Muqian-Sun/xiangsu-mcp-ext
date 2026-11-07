@@ -551,18 +551,6 @@ test('the stdio server exits when its client closes stdin, even with an official
   assert.equal(code, 0);
 });
 
-test('works_preview shows the gif only when asked, from works seen in this session', async () => {
-  const fetched = [];
-  const { deps } = worksWorld();
-  const client = await connect({ ...deps, fetchImage: async (url) => (fetched.push(url), { data: 'AAAA', mimeType: 'image/png' }) });
-  const unknown = await client.callTool({ name: 'works_preview', arguments: { template_ids: ['1'] } });
-  assert.match(unknown.content[0].text, /UNKNOWN_WORK: 1/);
-  await client.callTool({ name: 'works_search', arguments: { query: '合掌' } });
-  await client.callTool({ name: 'works_preview', arguments: { template_ids: ['1'] } });
-  await client.callTool({ name: 'works_preview', arguments: { template_ids: ['1'], animated: true } });
-  assert.deepEqual(fetched, ['https://c/1.png', 'https://c/1.gif']);
-});
-
 test('works are remembered by the server, so a download survives the searching window closing', async () => {
   const { seen, deps } = worksWorld();
   let live = [{ pid: 5 }, { pid: 7 }];
