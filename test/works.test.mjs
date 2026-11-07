@@ -228,14 +228,21 @@ async function connect(deps) {
 
 test('works tools use the lowest-pid window when no target is given', async () => {
   const seen = [];
+  // Each method answers with the shape the plugin really returns: works_nav has no item list.
+  const nav = { categories: [{ id: '44668', name: '推荐' }], sorts: Object.keys(WORK_SORTS) };
   const client = await connect({
     listInstances: () => [{ pid: 300 }, { pid: 200 }],
-    callPlugin: async (method, params, opts) => (seen.push({ method, params, opts }), { items: [], raw: [] }),
+    callPlugin: async (method, params, opts) => (seen.push({ method, params, opts }), method === 'works_nav' ? nav : { items: [], raw: [] }),
   });
   await client.callTool({ name: 'works_list', arguments: { sort: 'latest' } });
   assert.deepEqual(seen[0], { method: 'works_list', params: { sort: 'latest' }, opts: { pid: 200 } });
-  await client.callTool({ name: 'works_nav', arguments: { project_path: '/proj/X' } });
+  const navRes = await client.callTool({ name: 'works_nav', arguments: { project_path: '/proj/X' } });
+  assert.equal(navRes.isError, undefined, navRes.content[0].text);
+  assert.deepEqual(JSON.parse(navRes.content[0].text), nav);
   assert.deepEqual(seen[1].opts, { projectPath: '/proj/X' });
+  const anyWindow = await client.callTool({ name: 'works_nav', arguments: {} });
+  assert.deepEqual(JSON.parse(anyWindow.content[0].text), nav);
+  assert.deepEqual(seen[2].opts, { pid: 200 });
   const bad = await client.callTool({ name: 'works_list', arguments: { sort: 'hot' } });
   assert.equal(bad.isError, true);
   const none = await (await connect({ listInstances: () => [], callPlugin: async () => ({}) })).callTool({ name: 'works_nav', arguments: {} });
