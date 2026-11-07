@@ -51,7 +51,7 @@
 | `inspiration_preview` | 一次最多 8 个灵感的封面 |
 | `inspiration_collect` | 收藏或取消收藏灵感（写账号），之后重新查询确认生效 |
 | `inspiration_bind` | 把灵感绑定到当前工程，提交时带上 |
-| `tasks_list` / `task_detail` | 活动与特效征集任务（`kind=effect`）、成长任务（`kind=growth`）的列表与详情（状态、奖励、指定模板、完整任务说明） |
+| `tasks_list` / `task_detail` | 活动与特效征集任务（`kind=effect`）、成长任务（`kind=growth`）的列表与详情（状态、奖励、完整任务说明） |
 | `task_receive` | 领取一个待领取（`WAIT_RECEIVE`）的征集任务（写账号，不能撤销），其它状态直接拒绝 |
 | `task_bind` | 已领取的任务按任务详情页「去创作」的方式重开工程绑定 |
 | `rank_nav` / `rank_list` | 移动版排行榜的榜单、筛选项和两级分类（大类如人像美化、细类如美妆）；分页读榜（可按日期、每级一个分类、特效等级、面板、偏好、来自工具、年轻喜爱度过滤） |

@@ -140,7 +140,6 @@ function slimTask(lib, t, kind) {
     can_finish_times: t.can_fin_times ?? null,
     released_at: iso(t.release_at),
     offline_at: iso(t.offline_at),
-    template_count: Array.isArray(t.binding_templates) ? t.binding_templates.length : null,
     icon_url: t.icon_url || null,
   };
 }
@@ -382,7 +381,6 @@ const methods = {
         reward_end: d.reward_end || null,
         offline_at: iso(d.offline_at_unix),
         can_finish_times: d.can_fin_times ?? null,
-        template_ids: d.template_id_list ? JSON.parse(d.template_id_list) : [],
         content: (c.modules || []).map((m) => JSON.parse(m.render_content)),
       };
     }

@@ -551,7 +551,7 @@ export function createServer(deps = {}) {
     },
     {
       name: 'task_detail',
-      description: '一个任务的详情。征集任务返回状态、奖励时间、下线时间、指定模板和完整的任务说明（参与要求、奖项详情、近期热门等内容块）；成长任务返回奖励、参考工程、相关灵感和教程。task_id 须来自本会话的 tasks_list；活动没有详情。',
+      description: '一个任务的详情。征集任务返回状态、奖励时间、下线时间和完整的任务说明（参与要求、奖项详情、近期热门等内容块）；成长任务返回奖励、参考工程、相关灵感和教程。task_id 须来自本会话的 tasks_list；活动没有详情。',
       shape: { ...target, task_id: z.string().min(1).describe('tasks_list 返回的 task_id。') },
       run: async (a) => {
         const { project_path, instance_id, task_id } = a;
