@@ -13,7 +13,7 @@ import { createServer } from '../src/server.mjs';
 import { DOWNLOAD_TTL_MS, Downloads, checkTarget, copyProject, editorRoot, outlineProject } from '../src/works.mjs';
 
 const require = createRequire(import.meta.url);
-const { Library, M, WORK_SORTS } = require('../editor-plugin/library.cjs');
+const { Library, M, MAX_WORK_EFFECTS, WORK_SORTS } = require('../editor-plugin/library.cjs');
 
 function work(id, title, { effectId = 90686370, file = true } = {}) {
   return {
@@ -41,9 +41,20 @@ function setup({ download = { status: 'success', unzipPath: '/tmp/CreatedFromTem
         calls.list.push(p);
         return { body: { statusCode: 0, data: { dataInfos: { template: [work('1', 'AI 修仙合掌转场'), work('2', '人鱼公主', { effectId: '' })], cursor: 2, hasNext: true } } } };
       },
+      // searchType 2 is the 特效ID search; the server may also answer it with works of other effects.
       apiSearchTemplatesCategory: async (p) => {
         calls.search.push(p);
-        return { body: { statusCode: 0, data: { dataInfos: { template: [work('3', '合掌祈福时刻', { file: false })], cursor: 1, hasNext: false } } } };
+        const byId = {
+          90686370: [work('1', 'AI 修仙合掌转场')],
+          111: [work('5', '别的特效', { effectId: 222 })],
+        };
+        const byName = {
+          合掌: [work('3', '合掌祈福时刻', { file: false })],
+          眼底的情感测试: [work('6', '眼底的情感测试', { effectId: 91256938 }), work('7', '眼底的情感测试2')],
+          'AI 修仙合掌转场': [work('1', 'AI 修仙合掌转场')],
+        };
+        const template = (p.searchType === 2 ? byId : byName)[p.searchWord] || [];
+        return { body: { statusCode: 0, data: { dataInfos: { template, cursor: template.length, hasNext: false } } } };
       },
     },
     [M.worksUtil]: {
@@ -135,9 +146,77 @@ test('works_search sends the homepage search word within a category', async () =
   const out = await lib.worksSearch({ query: ' 合掌 ' });
   assert.equal(out.query, '合掌');
   assert.equal(calls.search[0].searchWord, '合掌');
+  assert.equal(calls.search[0].searchType, 1);
   assert.equal(calls.search[0].categoryId, '44668');
   assert.deepEqual(out.items.map((i) => i.template_id), ['3']);
   await assert.rejects(lib.worksSearch({ query: '  ' }), /INVALID_QUERY/);
+});
+
+test('works_search with effects looks each one up by effect id and falls back to same-name works', async () => {
+  const { lib, calls } = setup();
+  const out = await lib.worksSearch({
+    effects: [
+      { effect_id: '90686370', name: 'AI 修仙合掌转场' },
+      { effect_id: '90999486', name: ' 眼底的情感测试 ' },
+      { effect_id: '111', name: '没有的特效' },
+      { effect_id: '222' },
+    ],
+  });
+  assert.deepEqual(out.effects, [
+    { effect_id: '90686370', name: 'AI 修仙合掌转场', status: 'found', template_ids: ['1'] },
+    { effect_id: '90999486', name: '眼底的情感测试', status: 'same_name', template_ids: ['6'] },
+    { effect_id: '111', name: '没有的特效', status: 'not_on_homepage', template_ids: [] },
+    { effect_id: '222', name: null, status: 'not_on_homepage', template_ids: [] },
+  ]);
+  assert.deepEqual(out.category, { id: '44668', name: '推荐' });
+  assert.deepEqual(out.items.map((i) => [i.template_id, i.effect_id]), [['1', '90686370'], ['6', '91256938']]);
+  assert.deepEqual(out.raw.map((t) => t.templateId), ['1', '6']);
+  // A found effect costs one request; the name search only runs for a missed effect that has a name.
+  assert.deepEqual(
+    calls.search.map((p) => [p.searchType, p.searchWord, p.categoryId]),
+    [
+      [2, '90686370', '44668'],
+      [2, '90999486', '44668'],
+      [1, '眼底的情感测试', '44668'],
+      [2, '111', '44668'],
+      [1, '没有的特效', '44668'],
+      [2, '222', '44668'],
+    ],
+  );
+});
+
+test('works_search sends a search again when the server answers busy (statusCode 28)', async () => {
+  const { lib, calls, modules } = setup();
+  const answer = modules[M.worksCategory].apiSearchTemplatesCategory;
+  let busy = 2;
+  modules[M.worksCategory].apiSearchTemplatesCategory = async (p) => {
+    if (busy-- <= 0) return answer(p);
+    calls.search.push(p);
+    return { body: { statusCode: 28, message: '调用 搜索 RPC接口失败' } };
+  };
+  const out = await lib.worksSearch({ effects: [{ effect_id: '90686370' }] });
+  assert.equal(out.effects[0].status, 'found');
+  assert.equal(calls.search.length, 3);
+  busy = 3;
+  await assert.rejects(lib.worksSearch({ query: '合掌' }), /SEARCH_WORKS_FAILED: statusCode=28/);
+  assert.equal(calls.search.length, 6);
+  modules[M.worksCategory].apiSearchTemplatesCategory = async (p) => {
+    calls.search.push(p);
+    return { body: { statusCode: 5, message: 'other' } };
+  };
+  await assert.rejects(lib.worksSearch({ query: '合掌' }), /statusCode=5/);
+  assert.equal(calls.search.length, 7);
+});
+
+test('works_search takes either a query or effects, and checks the effects', async () => {
+  const { lib, calls } = setup();
+  await assert.rejects(lib.worksSearch({}), /INVALID_QUERY: pass either query or effects/);
+  await assert.rejects(lib.worksSearch({ query: '合掌', effects: [{ effect_id: '1' }] }), /INVALID_QUERY: pass either query or effects/);
+  await assert.rejects(lib.worksSearch({ effects: [{ effect_id: '1' }], sort: 'latest' }), /INVALID_QUERY: cursor, count and sort apply to query only/);
+  await assert.rejects(lib.worksSearch({ effects: [] }), /INVALID_EFFECTS: pass 1-20 effects/);
+  await assert.rejects(lib.worksSearch({ effects: Array.from({ length: 21 }, (_, i) => ({ effect_id: String(i + 1) })) }), /INVALID_EFFECTS/);
+  await assert.rejects(lib.worksSearch({ effects: [{ effect_id: '90686370' }, { effect_id: '9a' }] }), /INVALID_EFFECT_ID: 9a/);
+  assert.deepEqual(calls.search, []);
 });
 
 test('works_download takes the raw record and passes the editor the fields its unzip step writes', async () => {
@@ -253,6 +332,31 @@ test('server sort enum matches the plugin ranker table', async () => {
   const client = await connect({ listInstances: () => [], callPlugin: async () => ({}) });
   const { tools } = await client.listTools();
   assert.deepEqual(tools.find((t) => t.name === 'works_list').inputSchema.properties.sort.enum, Object.keys(WORK_SORTS));
+  assert.equal(tools.find((t) => t.name === 'works_search').inputSchema.properties.effects.maxItems, MAX_WORK_EFFECTS);
+});
+
+test('works found through effects can be downloaded, and the plugin gets the effects as given', async () => {
+  const { seen, deps } = worksWorld();
+  const call = deps.callPlugin;
+  deps.callPlugin = async (method, params, opts) => {
+    if (method !== 'works_search') return call(method, params, opts);
+    seen.push({ method, params, opts });
+    return {
+      category: { id: '44668', name: '推荐' },
+      effects: [{ effect_id: '90686370', name: null, status: 'found', template_ids: ['1'] }],
+      items: [{ template_id: '1', title: 'AI 修仙合掌转场' }],
+      raw: [{ templateId: '1', title: 'AI 修仙合掌转场' }],
+    };
+  };
+  const client = await connect(deps);
+  const bad = await client.callTool({ name: 'works_search', arguments: { effects: [{ effect_id: 'x1' }] } });
+  assert.equal(bad.isError, true);
+  const res = JSON.parse((await client.callTool({ name: 'works_search', arguments: { effects: [{ effect_id: '90686370' }] } })).content[0].text);
+  assert.deepEqual(seen.find((s) => s.method === 'works_search').params, { effects: [{ effect_id: '90686370' }] });
+  assert.equal(res.raw, undefined);
+  assert.equal(res.effects[0].status, 'found');
+  const dl = await client.callTool({ name: 'works_download', arguments: { template_id: '1' } });
+  assert.equal(dl.isError, undefined, dl.content[0].text);
 });
 
 // An editor unzip in the real layout: <tmp>/CreatedFromTemplate/<guid>/<name>.

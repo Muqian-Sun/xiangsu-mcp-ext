@@ -289,8 +289,24 @@ export function createServer(deps = {}) {
     },
     {
       name: 'works_search',
-      description: '按作品名搜索首页作品（与首页搜索框同一个接口，限定在一个分类内，默认推荐）。返回字段同 works_list。',
-      shape: { ...target, query: z.string().min(1).describe('作品名关键词，如「合掌」「转场」「换装」。'), ...workPage },
+      description:
+        '搜索首页作品（与首页搜索框同一个接口，限定在一个分类内，默认推荐）。两种用法二选一：query 按作品名搜，返回字段同 works_list；effects 按特效 ID 查排行榜等处给出的特效（rank_list / rank_subjects / rank_innovation_picks 的 effect_id），逐个返回 status：found 首页有这个特效的工程，same_name 首页没有它、只有同名作品（effect_id 不同，可能是别人的同名作品，不能当成同一个特效），not_on_homepage 作者没把工程分享到首页，拿不到工程。found 和 same_name 的作品在 items 里，template_id 可直接用于 works_preview / works_download / works_open。',
+      shape: {
+        ...target,
+        query: z.string().min(1).optional().describe('作品名关键词，如「合掌」「转场」「换装」。'),
+        effects: z
+          .array(
+            z.object({
+              effect_id: z.string().regex(/^\d+$/).describe('特效 ID，如 rank_list 返回的 effect_id。'),
+              name: z.string().min(1).optional().describe('特效名；给了才会在查不到 ID 时找同名作品。'),
+            }),
+          )
+          .min(1)
+          .max(20)
+          .optional()
+          .describe('要查的特效，最多 20 个（一页排行榜），不能和 query、cursor、count、sort 同时用。'),
+        ...workPage,
+      },
       run: works('works_search'),
     },
     {
@@ -551,7 +567,7 @@ export function createServer(deps = {}) {
     },
     {
       name: 'rank_list',
-      description: '分页读取一个排行榜（与像塑移动版排行榜页同一个接口）：名次、特效名、effect_id、等级、投稿量（峰值 / 累计）、跟拍量、男女比例、年轻喜爱度、热玩分、总收益等。可按日期、分类（每级一个，如只看「人像美化 › 美妆」）和筛选项过滤，选项见 rank_nav。',
+      description: '分页读取一个排行榜（与像塑移动版排行榜页同一个接口）：名次、特效名、effect_id、等级、投稿量（峰值 / 累计）、跟拍量、男女比例、年轻喜爱度、热玩分、总收益等。可按日期、分类（每级一个，如只看「人像美化 › 美妆」）和筛选项过滤，选项见 rank_nav。要看某个特效的工程，把 effect_id 和 name 交给 works_search 的 effects，查它在不在首页。',
       shape: {
         ...target,
         rank_type: z.number().int().optional().describe('rank_nav 返回的 rank_type，默认 1（年轻喜爱榜）。'),
