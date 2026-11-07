@@ -432,25 +432,21 @@ export function createServer(deps = {}) {
     {
       name: 'effect_check',
       description:
-        '提交前的特效检测。默认只做本地检查、不上传：按提交流程打包并比对包体上限，检查是否原样套用模板（编辑器会拒收与模板资源相同的工程）、登录状态、是否已有图标，返回 ok 和 issues。cloud=true 时再打开编辑器的「特效检测」窗口做云端性能检测（会把特效包上传到抖音做测试，不是发布），等待结果 passed / not_passed / needs_optimization / failed，详情留在该窗口里。',
+        '特效检测，和在编辑器工具栏点「特效检测」一样：打开「特效检测」窗口，由窗口把特效包上传到抖音做云端检测（不是发布），等待结果 passed / not_passed / needs_optimization / failed，详情留在该窗口里。超过 timeout_ms 还没出结果时返回 timeout，窗口保持打开。',
       shape: {
         ...target,
-        cloud: z.boolean().optional().describe('同时做云端检测，默认 false。'),
-        timeout_ms: z.number().int().min(10000).max(1800000).optional().describe('云端检测最长等待时间，默认 300000（5 分钟）。'),
+        timeout_ms: z.number().int().min(10000).max(1800000).optional().describe('最长等待时间，默认 300000（5 分钟）。'),
       },
       run: async (a) => {
-        const { project_path, instance_id, cloud = false, timeout_ms = 300000 } = a;
+        const { project_path, instance_id, timeout_ms = 300000 } = a;
         const projectPath = await projects.resolveProjectPath({ project_path, instance_id });
-        const local = await d.callPlugin('effect_check', {}, { projectPath, timeoutMs: 300000 });
-        if (!cloud) return text(local);
-        const cloudResult = await d.callPlugin('effect_check_cloud', { timeout_ms }, { projectPath, timeoutMs: timeout_ms + 30000 });
-        return text({ ...local, cloud: cloudResult });
+        return text(await d.callPlugin('effect_check', { timeout_ms }, { projectPath, timeoutMs: timeout_ms + 30000 }));
       },
     },
     {
       name: 'submit_prepare',
       description:
-        '准备提交特效：先跑 effect_check 的本地检查，全部通过后走和工具栏「提交特效」按钮相同的入口，由编辑器做自己的前置检查并打开提交窗口。只做到提交窗口打开为止：名称、提示语在窗口里填，真正的上传发布只有用户在窗口里确认才会发生，本工具不会发布。检查未通过时不打开窗口，返回 issues。',
+        '准备提交特效：先在本地检查提交流程会拒收的情况（包体上限、是否原样套用模板、登录、图标），全部通过后走和工具栏「提交特效」按钮相同的入口，由编辑器做自己的前置检查并打开提交窗口。只做到提交窗口打开为止：名称、提示语在窗口里填，真正的上传发布只有用户在窗口里确认才会发生，本工具不会发布。检查未通过时不打开窗口，返回 issues。',
       shape: { ...target },
       run: async (a) => {
         const projectPath = await projects.resolveProjectPath(a);
