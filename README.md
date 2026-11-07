@@ -80,7 +80,7 @@
 几点约定：
 
 - `library_apply` / `library_images` 只接受本会话里 `library_list` / `library_search` 返回过的 `template_id`；`works_download` / `works_open` 只接受本会话里 `works_list` / `works_search` / `works_by_effect` 返回过的作品（记录在 MCP 服务里，不受工程窗口开关影响，重启服务后需重新搜索）。
-- 像塑最多同时开 2 个工程窗口（编辑器的 `CHILD_PROCESS_LIMIT`）。都占满时 `project_open` / `project_new` / `works_open` 直接返回 `WINDOW_LIMIT`，先 `project_close` 一个；不检查的话首页只会弹警告，窗口永远不来。
+- 像塑最多同时开 2 个工程窗口（编辑器的 `CHILD_PROCESS_LIMIT`）。都占满时 `project_open` / `project_new` / `works_open` 返回 `WINDOW_LIMIT`（首页进程答复 `reuseCurrent`，工具不会把工程换进当前窗口），先 `project_close` 一个。
 - 素材的 `kind`：`package` 素材包、`ai_image` AI 图片、`ai_makeup` AI 妆容（按部位建多个对象）、`custom_gan` 自定义实时变脸、`foreground_sticker` / `face_sticker` 图片贴纸、`filter` 滤镜。素材广场里没有可应用内容的卡片（编辑器点应用也没反应）不列出，只在 `unsupported` 里计数。素材广场单个关键词最多返回 1000 条。广场卡片是异步应用的，工具等对象出现在场景里（最长 60 秒）才返回；新建的渲染组（如「2D 前景」「AI 实时变脸 (1)」）会作为新增对象报告，删除它们用官方的 `delete_render_group`。
 - `works_*`、`inspiration_*`、`task_*`、`rank_*` 与当前工程无关，任意一个工程窗口开着即可；不指定工程时由 pid 最小的窗口处理。
 - 灵感、任务、排行榜按编辑器首页活动中心的方式请求（编辑器的登录 Cookie 和签名请求头），读写的都是编辑器里登录的账号。排行榜用的是像塑移动版的接口，榜单名和筛选项取值与移动版一致，后端改版时可能失效。
