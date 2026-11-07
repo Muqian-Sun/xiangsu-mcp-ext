@@ -40,6 +40,11 @@ const RESET_TIMEOUT_MS = 20000;
 const HOLD_SLACK_MS = 30000;
 // The official screenshot's size: it scales the preview down to 320×569.
 const OFFICIAL_SHOT_SIDE = 569;
+// Picked, not measured: as many images per image_view call as the old preview tools showed.
+const IMAGE_VIEW_MAX = 8;
+// Derived: the SDK's stdio transport drops a message over 10 MiB and with it the connection, and six
+// animated GIFs from one task's content reached 16 MB of base64 (measured); this leaves room for the text.
+const IMAGE_VIEW_BYTES = 8 * 1024 * 1024;
 
 function saveDir(dir) {
   if (!path.isAbsolute(dir)) throw Error(`SAVE_TO_NOT_ABSOLUTE: ${dir}`);
@@ -180,13 +185,10 @@ export function createServer(deps = {}) {
   };
   const expiresAt = () => new Date(Date.now() + DOWNLOAD_TTL_MS).toISOString();
   // Inspirations, tasks and rank boards belong to the account rather than a project, so any window
-  // serves them. Inspirations seen in this session are kept for inspiration_preview.
-  const seenInspirations = new Map();
-  const community = (method, inspirationsOf) => async (args) => {
+  // serves them.
+  const community = (method) => async (args) => {
     const { project_path, instance_id, ...params } = args;
-    const out = await d.callPlugin(method, params, await homeWindow({ project_path, instance_id }));
-    if (inspirationsOf) for (const i of inspirationsOf(out)) seenInspirations.set(i.inspiration_id, { title: i.title, cover_url: i.cover_url });
-    return text(out);
+    return text(await d.callPlugin(method, params, await homeWindow({ project_path, instance_id })));
   };
   const workPage = {
     category_id: z.string().optional().describe('works_nav 返回的分类 ID；省略时用第一个分类（推荐）。'),
@@ -233,6 +235,29 @@ export function createServer(deps = {}) {
       run: async (a) => text(await projects.close(a)),
     },
     {
+      name: 'image_view',
+      description: `查看图片。其它工具只返回图片地址，要看画面时把地址交给本工具：素材、作品、灵感、热点的 cover_url，作品动图 gif_url，inspiration_detail 的 images，task_detail 内容块 source 里的 url，library_images 的 url；也可以传本机图片文件的绝对路径（如 menu_preview 的 image_file）。一次最多 ${IMAGE_VIEW_MAX} 张，只认 png / jpeg / gif / webp，视频（task_detail 里 mediaType=1 的 source）看不了。单张失败只在该项写明原因；图片很大（如动图）时一次给不完，没给的列在 not_returned 里，再调用一次即可。`,
+      shape: { images: z.array(z.string().min(1)).min(1).max(IMAGE_VIEW_MAX).describe('http(s) 图片地址，或本机图片文件的绝对路径。') },
+      run: async ({ images }) => {
+        const content = [];
+        let bytes = 0;
+        let shown = 0;
+        for (const src of images) {
+          const remote = /^https?:\/\//.test(src);
+          const img =
+            remote || path.isAbsolute(src) ? await imageContent(d, remote ? { url: src } : { file: src }) : { type: 'text', text: '图片读取失败：不是 http(s) 地址或绝对路径' };
+          const size = img.data ? img.data.length : 0;
+          if (shown && bytes + size > IMAGE_VIEW_BYTES) break;
+          bytes += size;
+          shown++;
+          content.push({ type: 'text', text: `第 ${shown} 张：${src}` }, img);
+        }
+        const rest = images.slice(shown);
+        if (rest.length) content.push({ type: 'text', text: JSON.stringify({ not_returned: rest, note: '超出单次体积上限，再调用一次 image_view 看这些' }, null, 2) });
+        return { content };
+      },
+    },
+    {
       name: 'library_nav',
       description:
         '列出像塑官方素材库里可直接应用的分类面板（panel_key）和类型 kind：general 为普通面板（如 3d_distortion=脸部变形/3D 变形、distortion=美型、gaoguai_gan/makeup_gan=AI 实时变脸、3d_makeup=美妆、3d_filter=滤镜、sticker=跟脸贴纸）；square 为 aigc_material=素材广场（其他创作者分享的素材，含现成的 AI 图片、AI 妆容、自定义实时变脸，应用时不重新生成、不扣额度）；collection 为 collection=收藏（当前账号收藏的素材）。需要扣额度现生成的 AI 面板不在其中。',
@@ -241,7 +266,7 @@ export function createServer(deps = {}) {
     },
     {
       name: 'library_list',
-      description: '分页列出某个官方素材面板里的素材：子分类、素材（template_id、title、kind、cover_url 等）和翻页游标。素材广场的子分类是妆容、图片、实时变脸、跟脸贴纸、前景贴纸、画面特效、3D 模型、3D 饰品；收藏的子分类是全部、美妆、滤镜等目录。没有可应用内容的广场卡片不列出，只在 unsupported 里计数。拿到 template_id 后用 library_preview 看图、library_apply 应用。',
+      description: '分页列出某个官方素材面板里的素材：子分类、素材（template_id、title、kind、cover_url 等）和翻页游标。素材广场的子分类是妆容、图片、实时变脸、跟脸贴纸、前景贴纸、画面特效、3D 模型、3D 饰品；收藏的子分类是全部、美妆、滤镜等目录。没有可应用内容的广场卡片不列出，只在 unsupported 里计数。按画面挑选时把 cover_url 交给 image_view 看；拿到 template_id 后用 library_apply 应用，AI 图片卡片（kind=ai_image）的整组结果图用 library_images 取。',
       shape: {
         ...target,
         panel_key: z.string().describe('library_nav 返回的 panel_key。'),
@@ -253,7 +278,7 @@ export function createServer(deps = {}) {
     },
     {
       name: 'library_search',
-      description: '按关键词搜索官方素材库，逐个面板查询以拿全结果（美妆、滤镜、脸部变形、AI 实时变脸、贴纸、画面特效、音效、素材广场等），按 offset / count 分页返回 template_id、title、panel_key、kind 和总数 total。素材广场单词最多返回 1000 条，可用 panel_key 只搜某个面板。kind：package 素材包、ai_image AI 图片、ai_makeup AI 妆容、custom_gan 自定义实时变脸、foreground_sticker 前景贴纸、face_sticker 跟脸贴纸、filter 滤镜。',
+      description: '按关键词搜索官方素材库，逐个面板查询以拿全结果（美妆、滤镜、脸部变形、AI 实时变脸、贴纸、画面特效、音效、素材广场等），按 offset / count 分页返回 template_id、title、panel_key、kind、cover_url 和总数 total。素材广场单词最多返回 1000 条，可用 panel_key 只搜某个面板。kind：package 素材包、ai_image AI 图片、ai_makeup AI 妆容、custom_gan 自定义实时变脸、foreground_sticker 前景贴纸、face_sticker 跟脸贴纸、filter 滤镜。',
       shape: {
         ...target,
         query: z.string().min(1).describe('搜索关键词，如「芒果脸」「小屁桃」「腮红」。'),
@@ -264,31 +289,14 @@ export function createServer(deps = {}) {
       run: library('library_search'),
     },
     {
-      name: 'library_preview',
+      name: 'library_images',
       description:
-        '查看官方素材的封面图，用于按画面挑选。一次最多 8 个，template_id 须来自本会话的 library_list / library_search。单个封面失败只在该项写明原因。all_images=true 时改为查看一张 AI 图片卡片（kind=ai_image）的整组结果图，按 image_index 编号，应用时用 library_apply 的 image_index 选择。',
-      shape: {
-        ...target,
-        template_ids: z.array(z.string()).min(1).max(8).describe('要看封面的 template_id。'),
-        all_images: z.boolean().optional().describe('查看 AI 图片卡片的全部结果图；此时 template_ids 只能有一个。'),
-      },
-      run: async ({ project_path, instance_id, template_ids, all_images = false }) => {
-        const content = [];
-        if (all_images) {
-          if (template_ids.length !== 1) throw Error('INVALID_ARGUMENTS(library_preview): all_images takes exactly one template_id');
-          const { slim, raw } = seenLib.get(template_ids[0]);
-          const images = await d.callPlugin('library_images', { item: raw }, await homeWindow({ project_path, instance_id }));
-          for (const img of images) {
-            content.push({ type: 'text', text: `${slim.title}（template_id ${slim.template_id}，image_index ${img.image_index}）` });
-            content.push(img.url ? await imageContent(d, { url: img.url }) : { type: 'text', text: '图片地址获取失败' });
-          }
-          return { content };
-        }
-        for (const c of template_ids.map((id) => seenLib.get(id).slim)) {
-          content.push({ type: 'text', text: `${c.title}（template_id ${c.template_id}）` });
-          content.push(c.cover_url ? await imageContent(d, { url: c.cover_url }) : { type: 'text', text: '无封面图' });
-        }
-        return { content };
+        '一张 AI 图片卡片（kind=ai_image）的整组结果图地址，按 image_index 编号；用 image_view 看图，应用时用 library_apply 的 image_index 选择。template_id 须来自本会话的 library_list / library_search。',
+      shape: { ...target, template_id: z.string().describe('library_list / library_search 返回的 template_id。') },
+      run: async ({ project_path, instance_id, template_id }) => {
+        const { slim, raw } = seenLib.get(template_id);
+        const images = await d.callPlugin('library_images', { item: raw }, await homeWindow({ project_path, instance_id }));
+        return text({ template_id: slim.template_id, title: slim.title, images });
       },
     },
     {
@@ -299,7 +307,7 @@ export function createServer(deps = {}) {
         ...target,
         template_id: z.string().describe('library_list / library_search 返回的 template_id。'),
         auto_instantiate: z.boolean().optional().describe('是否放进场景，默认 true；false 时只导入资源面板（只有 kind=package 支持）。'),
-        image_index: z.number().int().min(0).optional().describe('kind=ai_image 时用第几张结果图，默认 0；整组图见 library_preview 的 all_images。'),
+        image_index: z.number().int().min(0).optional().describe('kind=ai_image 时用第几张结果图，默认 0；整组图见 library_images。'),
       },
       run: async (a) => {
         const { project_path, instance_id, template_id, auto_instantiate, image_index } = a;
@@ -319,7 +327,7 @@ export function createServer(deps = {}) {
     },
     {
       name: 'works_list',
-      description: '分页列出首页某个分类下的作品：template_id、标题、标签、已发布到抖音的特效 ID 和发布量（effect_id / publish_count，没有则为 null）、使用量、工程包大小、封面。拿到 template_id 后用 works_preview 看封面、works_download 下载工程。',
+      description: '分页列出首页某个分类下的作品：template_id、标题、标签、已发布到抖音的特效 ID 和发布量（effect_id / publish_count，没有则为 null）、使用量、工程包大小、封面 cover_url 和动图 gif_url（用 image_view 看）。拿到 template_id 后用 works_download 下载工程。',
       shape: { ...target, ...workPage },
       run: works('works_list'),
     },
@@ -332,7 +340,7 @@ export function createServer(deps = {}) {
     {
       name: 'works_by_effect',
       description:
-        '按特效 ID 查排行榜等处给出的特效（rank_list / rank_subjects / rank_innovation_picks 的 effect_id）在首页有没有工程，与首页搜索框「特效ID」搜索同一个接口。逐个返回 status：found 首页有这个特效的工程；same_name 首页没有它、只有同名作品（effect_id 不同，可能是别人的同名作品，不能当成同一个特效）；not_on_homepage 作者没把工程分享到首页，拿不到工程。found 和 same_name 的作品在 items 里（字段同 works_list），template_id 可直接用于 works_preview / works_download / works_open。每个特效一到两次请求，20 个约 10 秒。',
+        '按特效 ID 查排行榜等处给出的特效（rank_list / rank_subjects / rank_innovation_picks 的 effect_id）在首页有没有工程，与首页搜索框「特效ID」搜索同一个接口。逐个返回 status：found 首页有这个特效的工程；same_name 首页没有它、只有同名作品（effect_id 不同，可能是别人的同名作品，不能当成同一个特效）；not_on_homepage 作者没把工程分享到首页，拿不到工程。found 和 same_name 的作品在 items 里（字段同 works_list），template_id 可直接用于 works_download / works_open。每个特效一到两次请求，20 个约 10 秒。',
       shape: {
         ...target,
         effects: z
@@ -348,24 +356,6 @@ export function createServer(deps = {}) {
         category_id: workPage.category_id,
       },
       run: works('works_by_effect'),
-    },
-    {
-      name: 'works_preview',
-      description: '查看首页作品的封面（animated=true 时看动图），一次最多 8 个，template_id 须来自本会话的 works_list / works_search / works_by_effect。',
-      shape: {
-        template_ids: z.array(z.string()).min(1).max(8).describe('要看的作品 template_id。'),
-        animated: z.boolean().optional().describe('看动图（gif）而不是静态封面，默认 false；动图较大。'),
-      },
-      run: async ({ template_ids, animated = false }) => {
-        const rows = template_ids.map((id) => seenWorks.get(id).slim);
-        const content = [];
-        for (const r of rows) {
-          const url = (animated && r.gif_url) || r.cover_url || r.gif_url;
-          content.push({ type: 'text', text: `${r.title}（template_id ${r.template_id}）` });
-          content.push(url ? await imageContent(d, { url }) : { type: 'text', text: '无封面图' });
-        }
-        return { content };
-      },
     },
     {
       name: 'works_download',
@@ -492,7 +482,7 @@ export function createServer(deps = {}) {
     },
     {
       name: 'inspiration_list',
-      description: '分页列出某个分类下的灵感：inspiration_id、标题、标签（如「激励」）、作者、收藏数、是否已收藏、是否 AI 灵感、封面。拿到 inspiration_id 后用 inspiration_preview 看图、inspiration_detail 看详情。',
+      description: '分页列出某个分类下的灵感：inspiration_id、标题、标签（如「激励」）、作者、收藏数、是否已收藏、是否 AI 灵感、封面 cover_url（用 image_view 看）。拿到 inspiration_id 后用 inspiration_detail 看详情。',
       shape: {
         ...target,
         tab: z.string().optional().describe('inspiration_nav 返回的分类名；省略时用第一个（全部）。'),
@@ -504,24 +494,9 @@ export function createServer(deps = {}) {
     },
     {
       name: 'inspiration_detail',
-      description: '一个灵感的详情：玩法说明、特效类型、激励说明、全部图片、作者、奖励、关联热点、关联官方工程、已有的同灵感特效及发布量，以及当前账号是否已收藏和总收藏数。',
+      description: '一个灵感的详情：玩法说明、特效类型、激励说明、全部图片的地址 images（用 image_view 看）、作者、奖励、关联热点、关联官方工程、已有的同灵感特效及发布量，以及当前账号是否已收藏和总收藏数。',
       shape: { ...target, inspiration_id: z.string().min(1).describe('inspiration_list / rank_hotspots / task_detail 返回的 inspiration_id，或像塑 / 抖音 App 灵感页里的灵感 ID。') },
-      run: community('inspiration_detail', (out) => [{ inspiration_id: out.inspiration_id, title: out.title, cover_url: out.images[0] || null }]),
-    },
-    {
-      name: 'inspiration_preview',
-      description: '查看灵感的封面图，一次最多 8 个，inspiration_id 须来自本会话的 inspiration_list / inspiration_detail / rank_hotspots（带 topic_id）/ task_detail。',
-      shape: { inspiration_ids: z.array(z.string()).min(1).max(8).describe('要看的 inspiration_id。') },
-      run: async ({ inspiration_ids }) => {
-        const content = [];
-        for (const id of inspiration_ids) {
-          const row = seenInspirations.get(id);
-          if (!row) throw Error(`UNKNOWN_INSPIRATION: ${id}; call inspiration_list, inspiration_detail, rank_hotspots or task_detail first`);
-          content.push({ type: 'text', text: `${row.title}（inspiration_id ${id}）` });
-          content.push(row.cover_url ? await imageContent(d, { url: row.cover_url }) : { type: 'text', text: '无封面图' });
-        }
-        return { content };
-      },
+      run: community('inspiration_detail'),
     },
     {
       name: 'inspiration_collect',
@@ -551,7 +526,8 @@ export function createServer(deps = {}) {
     },
     {
       name: 'task_detail',
-      description: '一个任务的详情。征集任务返回状态、奖励时间、下线时间和完整的任务说明（参与要求、奖项详情、近期热门等内容块）；成长任务返回奖励、参考工程、相关灵感和教程。task_id 须来自本会话的 tasks_list；活动没有详情。',
+      description:
+        '一个任务的详情。征集任务返回状态、奖励时间、下线时间和完整的任务说明（参与要求、奖项详情、近期热门等内容块）：内容块里的参考图和视频只给 source 地址，mediaType=1 的是 mp4 视频，其余是图片（用 image_view 看），空地址和 blob: 地址无效（任务页里也显示不出来）。成长任务返回奖励、参考工程、相关灵感（封面 cover_url）和教程。task_id 须来自本会话的 tasks_list；活动没有详情。',
       shape: { ...target, task_id: z.string().min(1).describe('tasks_list 返回的 task_id。') },
       run: async (a) => {
         const { project_path, instance_id, task_id } = a;
@@ -559,7 +535,6 @@ export function createServer(deps = {}) {
         if (t.raw.kind === 'activity') throw Error(`NO_TASK_DETAIL: ${task_id} is an activity; only effect and growth tasks have details`);
         const id = t.raw.kind === 'task' ? t.raw.item_id : t.slim.task_id;
         const out = await d.callPlugin('task_detail', { kind: t.raw.kind, id }, await homeWindow({ project_path, instance_id }));
-        for (const i of out.inspirations || []) seenInspirations.set(i.inspiration_id, { title: i.title, cover_url: i.cover_url });
         return text({ task_id, ...out });
       },
     },
@@ -622,13 +597,13 @@ export function createServer(deps = {}) {
     },
     {
       name: 'rank_hotspots',
-      description: '热点榜（按热度排序的抖音热点，每小时更新）：名次、topic_id、标题、说明、热度、相关灵感数。传 topic_id 时改为返回该热点下的灵感（inspiration_id、标题、标签、说明、封面）。',
+      description: '热点榜（按热度排序的抖音热点，每小时更新）：名次、topic_id、标题、说明、热度、相关灵感数。传 topic_id 时改为返回该热点下的灵感（inspiration_id、标题、标签、说明、封面 cover_url，用 image_view 看）。',
       shape: {
         ...target,
         count: z.number().int().min(1).optional().describe('最多返回多少个热点，默认全部。'),
         topic_id: z.string().min(1).optional().describe('只看这个热点下的灵感（rank_hotspots 返回的 topic_id）。'),
       },
-      run: community('rank_hotspots', (out) => (out.tabs || []).flatMap((t) => t.inspirations)),
+      run: community('rank_hotspots'),
     },
     {
       name: 'rank_subjects',
@@ -884,19 +859,10 @@ export function createServer(deps = {}) {
     },
     {
       name: 'menu_preview',
-      description: '查看菜单功能项的说明和示意图（编辑器悬停提示里的图），一次最多 8 个，用于按画面挑选 AI 变脸、美容等效果。',
-      shape: { ...target, menu_ids: z.array(z.string()).min(1).max(8).describe('menu_list 返回的 menu_id。') },
-      run: async (a) => {
-        const { project_path, instance_id, menu_ids } = a;
-        const projectPath = await projects.resolveProjectPath({ project_path, instance_id });
-        const rows = await d.callPlugin('menu_preview', { menu_ids }, { projectPath });
-        const content = [];
-        for (const r of rows) {
-          content.push({ type: 'text', text: `${r.name}（menu_id ${r.menu_id}）${r.description ? `：${r.description}` : ''}` });
-          content.push(r.image_url || r.image_file ? await imageContent(d, { url: r.image_url, file: r.image_file }) : { type: 'text', text: '无示意图' });
-        }
-        return { content };
-      },
+      description:
+        '菜单功能项的说明和示意图（编辑器悬停提示里的图）：示意图在 CDN 上的给 image_url，随编辑器安装的给本机文件 image_file，都没有为 null；按画面挑选 AI 变脸、美容等效果时把它交给 image_view 看。',
+      shape: { ...target, menu_ids: z.array(z.string()).min(1).describe('menu_list 返回的 menu_id。') },
+      run: plugin('menu_preview'),
     },
     {
       name: 'menu_add',

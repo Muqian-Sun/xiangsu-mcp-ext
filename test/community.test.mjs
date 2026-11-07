@@ -708,9 +708,8 @@ async function connect(deps) {
   return client;
 }
 
-test('community tools use the lowest-pid window and previews show inspirations seen in this session', async () => {
+test('community tools use the lowest-pid window and return image addresses without fetching them', async () => {
   const seen = [];
-  const fetched = [];
   const answers = {
     inspiration_list: { items: [{ inspiration_id: '1', title: '鎏花入镜', cover_url: 'https://c/1.png' }] },
     inspiration_detail: { inspiration_id: '2', title: '锦鲤妆', images: ['https://c/2.png', 'https://c/2b.png'] },
@@ -722,24 +721,21 @@ test('community tools use the lowest-pid window and previews show inspirations s
   const client = await connect({
     listInstances: () => [{ pid: 300 }, { pid: 200 }],
     callPlugin: async (method, params, opts) => (seen.push({ method, params, opts }), answers[method]),
-    fetchImage: async (url) => (fetched.push(url), { data: 'AAAA', mimeType: 'image/png' }),
+    fetchImage: async () => assert.fail('no image may be fetched'),
   });
-  const unknown = await client.callTool({ name: 'inspiration_preview', arguments: { inspiration_ids: ['1'] } });
-  assert.match(unknown.content[0].text, /UNKNOWN_INSPIRATION: 1/);
-  await client.callTool({ name: 'rank_list', arguments: { rank_type: 2, levels: ['S'], count: 5 } });
+  const json = async (name, args) => {
+    const res = await client.callTool({ name, arguments: args });
+    assert.equal(res.content.length, 1, name);
+    return JSON.parse(res.content[0].text);
+  };
+  await json('rank_list', { rank_type: 2, levels: ['S'], count: 5 });
   assert.deepEqual(seen[0], { method: 'rank_list', params: { rank_type: 2, levels: ['S'], count: 5 }, opts: { pid: 200 } });
-  await client.callTool({ name: 'inspiration_list', arguments: { project_path: '/proj/X' } });
+  assert.deepEqual(await json('inspiration_list', { project_path: '/proj/X' }), answers.inspiration_list);
   assert.deepEqual(seen[1].opts, { projectPath: '/proj/X' });
-  await client.callTool({ name: 'inspiration_detail', arguments: { inspiration_id: '2' } });
-  await client.callTool({ name: 'rank_hotspots', arguments: { topic_id: '13439' } });
-  await client.callTool({ name: 'tasks_list', arguments: { kind: 'growth' } });
-  await client.callTool({ name: 'task_detail', arguments: { task_id: 'g' } });
-  const res = await client.callTool({ name: 'inspiration_preview', arguments: { inspiration_ids: ['1', '2', '3', '4'] } });
-  assert.deepEqual(fetched, ['https://c/1.png', 'https://c/2.png', 'https://c/4.png']);
-  assert.deepEqual(
-    res.content.filter((c) => c.type === 'text').map((c) => c.text),
-    ['鎏花入镜（inspiration_id 1）', '锦鲤妆（inspiration_id 2）', '咕嘟（inspiration_id 3）', '无封面图', '重返2018（inspiration_id 4）'],
-  );
+  assert.deepEqual(await json('inspiration_detail', { inspiration_id: '2' }), answers.inspiration_detail);
+  assert.deepEqual(await json('rank_hotspots', { topic_id: '13439' }), answers.rank_hotspots);
+  await json('tasks_list', { kind: 'growth' });
+  assert.deepEqual(await json('task_detail', { task_id: 'g' }), { task_id: 'g', ...answers.task_detail });
   for (const name of ['rank_list', 'rank_subjects']) {
     const tooMany = await client.callTool({ name, arguments: { count: 21 } });
     assert.equal(tooMany.isError, true, name);

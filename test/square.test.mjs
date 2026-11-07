@@ -339,12 +339,10 @@ test('library tools pass the new search, list, preview and apply options to the 
   assert.deepEqual(seen.find((s) => s.method === 'library_search').params, { query: '猫', panel_key: 'aigc_material', offset: 50, count: 20 });
   await call('library_list', { panel_key: 'collection', cursor: 'tok2' });
   assert.deepEqual(seen.find((s) => s.method === 'library_list').params, { panel_key: 'collection', cursor: 'tok2' });
-  const two = await call('library_preview', { template_ids: ['901', '901'], all_images: true });
-  assert.match(two.content[0].text, /all_images takes exactly one template_id/);
-  const prev = await call('library_preview', { template_ids: ['901'], all_images: true });
+  const imgs = JSON.parse((await call('library_images', { template_id: '901' })).content[0].text);
   assert.deepEqual(seen.find((s) => s.method === 'library_images'), { method: 'library_images', params: { item: raw }, opts: { pid: 7 } });
-  assert.deepEqual(fetched, ['https://img/0.png', 'https://img/1.png']);
-  assert.deepEqual(prev.content.filter((c) => c.type === 'text').map((c) => c.text), ['萌猫造型帽子（template_id 901，image_index 0）', '萌猫造型帽子（template_id 901，image_index 1）']);
+  assert.deepEqual(imgs.images.map((i) => i.url), ['https://img/0.png', 'https://img/1.png']);
+  assert.deepEqual(fetched, []);
   await call('library_apply', { template_id: '901', image_index: 1 });
   assert.deepEqual(seen.find((s) => s.method === 'library_apply').params, { item: raw, image_index: 1 });
   const big = await call('library_search', { query: '猫', count: 201 });
