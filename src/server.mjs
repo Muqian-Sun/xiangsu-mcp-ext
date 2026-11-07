@@ -233,7 +233,10 @@ export function createServer(deps = {}) {
       name: 'works_nav',
       description: '列出像塑首页「模板」里的作品分类（推荐、官方工程、新手必做、游戏、妆容、AI玩法等）和可用排序。首页作品是完整的像塑工程（官方工程和用户投稿），可下载到本地阅读、学习其场景和脚本做法。任意一个工程窗口开着即可。',
       shape: { ...target },
-      run: works('works_nav'),
+      run: async (a) => {
+        const { project_path, instance_id } = a;
+        return text(await d.callPlugin('works_nav', {}, await homeWindow({ project_path, instance_id })));
+      },
     },
     {
       name: 'works_list',
