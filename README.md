@@ -58,6 +58,9 @@
 | `rank_subjects` | 专题合集里按主题的特效榜（`kind=effect`，如「热爆美妆特效榜」「熊出没IP特效榜」）和模板榜（`kind=template`，如「歌词玩法模板榜」），分页或按 `keyword` 搜榜名；带 `subject_id` 时返回该榜全部特效 |
 | `rank_creators_month` / `rank_innovation_picks` | 创新计划创作者月榜、官方精选（模板 / 特效） |
 | `music_categories` / `music_list` / `music_apply` | 抖音音乐分类、搜索（带版权标记），按音乐库「使用」套用，可截取片段 |
+| `scene_tree` | 场景结构的缩进文本：渲染组、对象 guid、名称、是否隐藏、组件类型；可只看子树、控制层数 |
+| `inspect_many` | 一次查看多个对象的组件参数，可按组件类型、属性名片段过滤，`{type, data}` 包装直接展开 |
+| `preview_frames` | 按间隔连续截取预览（可临时换预览视频、截完切回，可按比例裁出局部），每帧存成文件并返回 |
 | `menu_list` / `menu_preview` / `menu_add` | 「添加对象」菜单项列表、说明和示意图、按菜单项添加（可撤销）；云端 AI 生成项不暴露 |
 | `face_warp_list` / `face_warp_set_intensity` | 列出塑型画笔、改强度（保留笔刷数据，可撤销） |
 | `object_remove` | 删除对象（可撤销），报告只被它使用的资源和它导入时带来的素材包文件夹；`delete_unused_resources=true` 时一并删除 |
@@ -127,7 +130,7 @@ node scripts/install.mjs   # 装到 ~/Library/Application Support/DouyinAR/Plugi
 ## 开发
 
 - `npm test`：用模拟的编辑器模块测插件逻辑；用内存传输测 MCP 工具、官方转发、工程窗口编排。
-- `node scripts/mcp-call.mjs <tool> '<json>' [...]`：新起一个服务按顺序调工具，图片写到 `<临时目录>/xs-mcp-call/`（每次运行先清空）。
+- `node scripts/mcp-call.mjs <tool> '<json>' [...]`：新起一个服务按顺序调工具，图片写到 `<临时目录>/xs-mcp-call/` 下每次运行一个子目录（一小时后清理）。`scripts/official-call.mjs` 直调官方 MCP，图片同样放在 `xs-official-call/` 下。
 - `node scripts/call.mjs <method> '<json>' [--pid N]`：直调插件。
 - `node scripts/e2e.mjs <工程路径> <关键词> [标题]`：搜索 + 应用 + 未知 ID 报错的端到端检查（会真的导入素材，只对测试工程用）。
 - `config.local.json` 里 `devEval: true` 时可用插件方法 `dev_eval` 在编辑器进程里执行探测代码（`scripts/call.mjs dev_eval '{}' --code-file x.js`，`scripts/dump-source.js` 可导出模块源码）。开关每次调用时读取，改回 `false` 立即失效。**日常使用保持 `false`**：它能在编辑器进程里执行任意代码。

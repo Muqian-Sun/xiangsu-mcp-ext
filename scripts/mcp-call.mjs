@@ -1,18 +1,15 @@
 // Dev helper: start a fresh stdio server and call one or more tools in sequence; images are written to
-// <tmp>/xs-mcp-call, which each run clears first.
+// a per-run folder under <tmp>/xs-mcp-call (removed after an hour).
 // node scripts/mcp-call.mjs <tool> '<json>' [<tool> '<json>' ...]
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
+import { runImageDir } from './run-images.mjs';
 
 const args = process.argv.slice(2);
-// Images from the previous run are dropped so screenshots do not pile up in the temp dir.
-const imageDir = path.join(os.tmpdir(), 'xs-mcp-call');
-fs.rmSync(imageDir, { recursive: true, force: true });
-fs.mkdirSync(imageDir);
+const imageDir = runImageDir('xs-mcp-call');
 const client = new Client({ name: 'mcp-call', version: '0' });
 await client.connect(new StdioClientTransport({ command: process.execPath, args: [fileURLToPath(new URL('../src/server.mjs', import.meta.url))] }));
 let failed = false;
