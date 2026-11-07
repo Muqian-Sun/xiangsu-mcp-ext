@@ -88,14 +88,8 @@ const methods = {
     return this.worksPage(body(res, 'SEARCH_WORKS').dataInfos || {});
   },
 
-  // Either a project-name query, or effects (effect_id and optional name, as rank boards list them)
-  // looked up one by one the way the homepage's 特效ID search does.
-  async worksSearch({ query, effects, category_id, cursor, count, sort } = {}) {
-    if ((query === undefined) === (effects === undefined)) throw Error('INVALID_QUERY: pass either query or effects');
-    if (effects !== undefined) {
-      if (cursor !== undefined || count !== undefined || sort !== undefined) throw Error('INVALID_QUERY: cursor, count and sort apply to query only');
-      return this.worksByEffects(effects, await this.worksCategory(category_id));
-    }
+  // Matched on the project name, like the homepage search box's default 特效名称 option.
+  async worksSearch({ query, category_id, cursor, count, sort } = {}) {
     if (typeof query !== 'string' || !query.trim()) throw Error('INVALID_QUERY: query must be a non-empty string');
     const ranker = sortValue(sort);
     const category = await this.worksCategory(category_id);
@@ -103,10 +97,11 @@ const methods = {
     return { query: q, category, ...(await this.worksSearchPage(category, q, 'name', { cursor, count, ranker })) };
   },
 
-  // A work matches an effect only on its effect_id. An effect without one may still have homepage
-  // works of the same name (another creator's copy, or a re-upload); those come back as same_name
-  // candidates, never as the effect itself.
-  async worksByEffects(effects, category) {
+  // Effects (effect_id and optional name, as rank boards list them) looked up one by one with the
+  // homepage's 特效ID search. A work matches an effect only on its effect_id. An effect without one may
+  // still have homepage works of the same name (another creator's copy, or a re-upload); those come
+  // back as same_name candidates, never as the effect itself.
+  async worksByEffect({ effects, category_id } = {}) {
     if (!Array.isArray(effects) || !effects.length || effects.length > MAX_EFFECTS) throw Error(`INVALID_EFFECTS: pass 1-${MAX_EFFECTS} effects`);
     const items = [];
     const raw = [];
@@ -125,6 +120,7 @@ const methods = {
       if (!/^\d+$/.test(id)) throw Error(`INVALID_EFFECT_ID: ${e && e.effect_id}`);
       return { id, name: e.name === undefined ? null : String(e.name).trim() || null };
     });
+    const category = await this.worksCategory(category_id);
     const out = [];
     for (const { id, name } of wanted) {
       const found = take(await this.worksSearchPage(category, id, 'effect_id'), (w) => w.effect_id === id);
@@ -141,10 +137,10 @@ const methods = {
   // Downloads the project zip (into the editor's LokiDownload/TemplateResources cache) and unzips a
   // fresh copy into the instance's ProjectCreatedTmp/CreatedFromTemplate, exactly as opening a work
   // from the homepage does; the project itself is not opened. `item` is a raw record from works_list /
-  // works_search.
+  // works_search / works_by_effect.
   async worksDownload({ item: t }) {
     this.ensureCompatible('works');
-    if (!t || !t.templateId) throw Error('INVALID_WORK: pass the raw work record returned by works_list / works_search');
+    if (!t || !t.templateId) throw Error('INVALID_WORK: pass the raw work record returned by works_list / works_search / works_by_effect');
     if (!Object.values((t.businessExtra && t.businessExtra.fileMap) || {}).some((f) => f && f.url)) {
       throw Error(`NO_PACKAGE_FILE: work ${t.templateId} has no downloadable project`);
     }
@@ -171,6 +167,7 @@ const METHODS = {
   works_nav: 'worksNav',
   works_list: 'worksList',
   works_search: 'worksSearch',
+  works_by_effect: 'worksByEffect',
   works_download: 'worksDownload',
 };
 

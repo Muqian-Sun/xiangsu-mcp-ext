@@ -152,9 +152,9 @@ test('works_search sends the homepage search word within a category', async () =
   await assert.rejects(lib.worksSearch({ query: '  ' }), /INVALID_QUERY/);
 });
 
-test('works_search with effects looks each one up by effect id and falls back to same-name works', async () => {
+test('works_by_effect looks each effect up by effect id and falls back to same-name works', async () => {
   const { lib, calls } = setup();
-  const out = await lib.worksSearch({
+  const out = await lib.worksByEffect({
     effects: [
       { effect_id: '90686370', name: 'AI 修仙合掌转场' },
       { effect_id: '90999486', name: ' 眼底的情感测试 ' },
@@ -194,7 +194,7 @@ test('works_search sends a search again when the server answers busy (statusCode
     calls.search.push(p);
     return { body: { statusCode: 28, message: '调用 搜索 RPC接口失败' } };
   };
-  const out = await lib.worksSearch({ effects: [{ effect_id: '90686370' }] });
+  const out = await lib.worksByEffect({ effects: [{ effect_id: '90686370' }] });
   assert.equal(out.effects[0].status, 'found');
   assert.equal(calls.search.length, 3);
   busy = 3;
@@ -208,15 +208,15 @@ test('works_search sends a search again when the server answers busy (statusCode
   assert.equal(calls.search.length, 7);
 });
 
-test('works_search takes either a query or effects, and checks the effects', async () => {
+test('works_by_effect checks every effect before sending any search', async () => {
   const { lib, calls } = setup();
-  await assert.rejects(lib.worksSearch({}), /INVALID_QUERY: pass either query or effects/);
-  await assert.rejects(lib.worksSearch({ query: '合掌', effects: [{ effect_id: '1' }] }), /INVALID_QUERY: pass either query or effects/);
-  await assert.rejects(lib.worksSearch({ effects: [{ effect_id: '1' }], sort: 'latest' }), /INVALID_QUERY: cursor, count and sort apply to query only/);
-  await assert.rejects(lib.worksSearch({ effects: [] }), /INVALID_EFFECTS: pass 1-20 effects/);
-  await assert.rejects(lib.worksSearch({ effects: Array.from({ length: 21 }, (_, i) => ({ effect_id: String(i + 1) })) }), /INVALID_EFFECTS/);
-  await assert.rejects(lib.worksSearch({ effects: [{ effect_id: '90686370' }, { effect_id: '9a' }] }), /INVALID_EFFECT_ID: 9a/);
+  await assert.rejects(lib.worksByEffect({}), /INVALID_EFFECTS: pass 1-20 effects/);
+  await assert.rejects(lib.worksByEffect({ effects: [] }), /INVALID_EFFECTS: pass 1-20 effects/);
+  await assert.rejects(lib.worksByEffect({ effects: Array.from({ length: 21 }, (_, i) => ({ effect_id: String(i + 1) })) }), /INVALID_EFFECTS/);
+  await assert.rejects(lib.worksByEffect({ effects: [{ effect_id: '90686370' }, { effect_id: '9a' }] }), /INVALID_EFFECT_ID: 9a/);
   assert.deepEqual(calls.search, []);
+  await lib.worksByEffect({ effects: [{ effect_id: '90686370' }], category_id: '40669' });
+  assert.equal(calls.search[0].categoryId, '40669');
 });
 
 test('works_download takes the raw record and passes the editor the fields its unzip step writes', async () => {
@@ -332,14 +332,14 @@ test('server sort enum matches the plugin ranker table', async () => {
   const client = await connect({ listInstances: () => [], callPlugin: async () => ({}) });
   const { tools } = await client.listTools();
   assert.deepEqual(tools.find((t) => t.name === 'works_list').inputSchema.properties.sort.enum, Object.keys(WORK_SORTS));
-  assert.equal(tools.find((t) => t.name === 'works_search').inputSchema.properties.effects.maxItems, MAX_WORK_EFFECTS);
+  assert.equal(tools.find((t) => t.name === 'works_by_effect').inputSchema.properties.effects.maxItems, MAX_WORK_EFFECTS);
 });
 
-test('works found through effects can be downloaded, and the plugin gets the effects as given', async () => {
+test('works found by works_by_effect can be downloaded, and the plugin gets the effects as given', async () => {
   const { seen, deps } = worksWorld();
   const call = deps.callPlugin;
   deps.callPlugin = async (method, params, opts) => {
-    if (method !== 'works_search') return call(method, params, opts);
+    if (method !== 'works_by_effect') return call(method, params, opts);
     seen.push({ method, params, opts });
     return {
       category: { id: '44668', name: '推荐' },
@@ -349,10 +349,10 @@ test('works found through effects can be downloaded, and the plugin gets the eff
     };
   };
   const client = await connect(deps);
-  const bad = await client.callTool({ name: 'works_search', arguments: { effects: [{ effect_id: 'x1' }] } });
+  const bad = await client.callTool({ name: 'works_by_effect', arguments: { effects: [{ effect_id: 'x1' }] } });
   assert.equal(bad.isError, true);
-  const res = JSON.parse((await client.callTool({ name: 'works_search', arguments: { effects: [{ effect_id: '90686370' }] } })).content[0].text);
-  assert.deepEqual(seen.find((s) => s.method === 'works_search').params, { effects: [{ effect_id: '90686370' }] });
+  const res = JSON.parse((await client.callTool({ name: 'works_by_effect', arguments: { effects: [{ effect_id: '90686370' }] } })).content[0].text);
+  assert.deepEqual(seen.find((s) => s.method === 'works_by_effect').params, { effects: [{ effect_id: '90686370' }] });
   assert.equal(res.raw, undefined);
   assert.equal(res.effects[0].status, 'found');
   const dl = await client.callTool({ name: 'works_download', arguments: { template_id: '1' } });
