@@ -2,6 +2,7 @@
 // stdio MCP server: everything 像塑's official MCP offers (proxied unchanged), plus editor features the
 // official server cannot reach, served by the XiangsuMcpExt editor plugin.
 import fs from 'node:fs';
+import path from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
@@ -14,6 +15,9 @@ import { OfficialMcp } from './official.mjs';
 import { fetchImage, readImageFile } from './images.mjs';
 import { Projects, openWithApp } from './projects.mjs';
 import { prepareIcon } from './icons.mjs';
+import { formatObjects, formatTree, pickInspect, resolveRefs } from './inspect.mjs';
+import { loadScene } from './scenefile.mjs';
+import { cropImage, framesDir } from './frames.mjs';
 import { DOWNLOAD_TTL_MS, Downloads, checkTarget, copyProject, editorRoot, outlineProject } from './works.mjs';
 
 const VERSION = '0.4.0';
@@ -22,6 +26,27 @@ const target = {
   project_path: z.string().optional().describe('目标工程的绝对路径。与 instance_id 二选一；只开了一个工程窗口时都可省略。'),
   instance_id: z.string().optional().describe('官方 list_instances 返回的 instance_id，与 project_path 二选一。'),
 };
+
+const saveTo = z.string().min(1).optional().describe('另存到这个目录（绝对路径，不存在会创建），长期保留。');
+// Picked, not measured: four videos covers 正脸、摇头、点头、双人; 24 full-size frames (about 75 KB
+// each, measured) keep one answer at about 1.8 MB of images.
+const MAX_FRAME_VIDEOS = 4;
+const MAX_FRAMES = 24;
+
+function saveDir(dir) {
+  if (!path.isAbsolute(dir)) throw Error(`SAVE_TO_NOT_ABSOLUTE: ${dir}`);
+  fs.mkdirSync(dir, { recursive: true });
+  return dir;
+}
+
+const unreadableNote = (scene) =>
+  scene.unreadable.length ? `注意：${scene.unreadable.length} 个资源描述文件（.extra）读不了，其中的资源只给原始路径：\n${scene.unreadable.join('\n')}` : null;
+
+function saveFile(dir, name, body) {
+  const file = path.join(saveDir(dir), name);
+  fs.writeFileSync(file, body);
+  return file;
+}
 
 class Seen {
   constructor(code, source, key = 'template_id') {
@@ -62,6 +87,8 @@ export function createServer(deps = {}) {
     readImageFile,
     openWithApp,
     prepareIcon,
+    cropImage,
+    framesDir,
     qrPng: (text) => QRCode.toBuffer(text, { width: 360, margin: 2 }),
     sleep,
     openTimeoutMs: 90000,
@@ -90,6 +117,22 @@ export function createServer(deps = {}) {
     return text(await d.callPlugin(method, params, { projectPath, timeoutMs }));
   };
 
+  // Official tools take the official instance_id; ours also accept the project path, and either can be
+  // left out while only one editor window is open.
+  const officialInstance = async ({ project_path, instance_id }) => {
+    if (instance_id !== undefined) return String(instance_id);
+    const list = await projects.officialInstances();
+    const real = (p) => {
+      try {
+        return fs.realpathSync(p);
+      } catch (_) {
+        return path.resolve(p);
+      }
+    };
+    const hits = project_path ? list.filter((i) => i.project_path && real(i.project_path) === real(project_path)) : list;
+    if (hits.length === 1) return String(hits[0].instance_id);
+    throw Error(project_path ? `NO_UNIQUE_INSTANCE for ${project_path}: ${hits.length} matches` : `AMBIGUOUS_INSTANCE: ${list.length} editor windows; pass project_path or instance_id`);
+  };
   const library = (method) => async (args) => {
     const { project_path, instance_id, ...params } = args;
     const projectPath = await projects.resolveProjectPath({ project_path, instance_id });
@@ -606,6 +649,162 @@ export function createServer(deps = {}) {
         const m = seenMusic.get(music_id);
         const params = { item: m.raw, ...(m.category_code ? { category_code: m.category_code } : {}), ...(start_sec === undefined ? {} : { start_sec }), ...(end_sec === undefined ? {} : { end_sec }) };
         return text(await d.callPlugin('music_apply', params, { projectPath, timeoutMs: 180000 }));
+      },
+    },
+    {
+      name: 'scene_tree',
+      description:
+        '把场景结构输出成紧凑的缩进文本：渲染组，以及每个对象的 guid、名称、是否隐藏、组件类型。比 get_scene 的 JSON 好读，适合先摸清结构再用 inspect_many 查参数。subtree 只看某个对象（guid 或名称），depth 控制展开层数（默认 6）；没展开的子对象会注明数量。传 project_dir（工程目录，如 works_download 下载的作品）时不需要打开窗口，直接读 Assets/main.scene 和 main.scene.extra，对象写成 #序号，组件类型和窗口里显示的一致（编辑器数据缺失时退回场景文件里的名称）；没有渲染组这一层，渲染组本身作为根对象列出。save_to 是目录的绝对路径，结果另存为其中的 scene_tree.txt，长期保留。',
+      shape: {
+        ...target,
+        project_dir: z.string().min(1).optional().describe('不开窗口、直接读这个工程目录的场景文件；给了它就不看 project_path / instance_id。'),
+        subtree: z.string().min(1).optional().describe('只输出这个对象及其子对象（guid 或名称；project_dir 时用 #序号 或名称）。'),
+        depth: z.number().int().min(1).max(30).optional().describe('展开层数，默认 6。'),
+        save_to: saveTo,
+      },
+      run: async (a) => {
+        const { project_dir, subtree, depth = 6, save_to } = a;
+        let out;
+        let warn = null;
+        if (project_dir) {
+          const scene = loadScene(project_dir);
+          out = formatObjects(scene.tree({ subtree, depth }));
+          warn = unreadableNote(scene);
+        } else {
+          const instance_id = await officialInstance(a);
+          out = formatTree(await d.official.callJson('get_scene', { instance_id, summary: false, depth, ...(subtree ? { subtree } : {}), intention: '读取场景结构' }));
+        }
+        out = out || '（场景为空）';
+        const saved = save_to ? saveFile(save_to, 'scene_tree.txt', out) : null;
+        return { content: [{ type: 'text', text: [out, warn, saved && `已保存：${saved}`].filter(Boolean).join('\n\n') }] };
+      },
+    },
+    {
+      name: 'inspect_many',
+      description:
+        '一次查看多个对象的组件参数（逐个调用官方 inspect），值里的 {type, data} 包装直接展开成值，超长数组只给长度和前几项；绑定的资源写成 {resource, type, file}，引用的对象写成 {object, name}。component_types 只留某些组件（如 ["Transform"]），fields 只留属性名包含这些片段的属性（不分大小写，如 ["intensity", "position"]）。preset="key" 自动留下通常决定效果的参数：位置/缩放/旋转、显隐与启用、强度/不透明度/权重/颜色类属性、文字内容（str）与 2D 尺寸（sizeDelta）、绑定的资源，以及场景文件里脚本组件的全部参数（这份清单是按已做过的妆容、形变、贴纸、文字效果拍的，缺的用 fields 补，可与 fields 同时用）。传 project_dir 时不开窗口、直接读场景文件（含编辑器面板里的参数，如妆容的贴图和强度），guids 用 scene_tree 给出的 #序号；内置资源写成 {builtin: id}，组件运行时生成、工程里没有文件的资源写成 {path}。单个对象失败只在该项写明原因。save_to 是目录的绝对路径，结果另存为其中的 inspect_many.json，长期保留。',
+      shape: {
+        ...target,
+        project_dir: z.string().min(1).optional().describe('不开窗口、直接读这个工程目录的场景文件；给了它就不看 project_path / instance_id。'),
+        guids: z.array(z.string().min(1)).min(1).max(40).describe('对象或组件的 guid（scene_tree / get_scene 返回的；project_dir 时是 #序号）。'),
+        component_types: z.array(z.string().min(1)).min(1).optional().describe('只保留这些类型的组件。'),
+        fields: z.array(z.string().min(1)).min(1).optional().describe('只保留属性名包含这些片段的属性。'),
+        preset: z.enum(['key']).optional().describe('key：只留关键参数，见工具说明。'),
+        save_to: saveTo,
+      },
+      run: async (a) => {
+        const { project_dir, guids, component_types, fields, preset, save_to } = a;
+        const pick = { component_types, fields, preset };
+        const out = [];
+        let warn = null;
+        if (project_dir) {
+          const scene = loadScene(project_dir);
+          warn = unreadableNote(scene);
+          for (const guid of guids) {
+            try {
+              out.push(pickInspect(scene.inspect(guid), pick));
+            } catch (e) {
+              out.push({ guid, error: String(e.message ?? e) });
+            }
+          }
+        } else {
+          const instance_id = await officialInstance(a);
+          const root = await projects.resolveProjectPath({ instance_id });
+          const inspect = (guid) => d.official.callJson('inspect', { instance_id, guid, intention: '批量查看对象参数' });
+          const cache = new Map();
+          for (const guid of guids) {
+            try {
+              out.push(await resolveRefs(pickInspect(await inspect(guid), pick), inspect, { root, cache }));
+            } catch (e) {
+              out.push({ guid, error: String(e.message ?? e) });
+            }
+          }
+        }
+        const res = text(out);
+        if (warn) res.content.push({ type: 'text', text: warn });
+        if (save_to) res.content.push({ type: 'text', text: `已保存：${saveFile(save_to, 'inspect_many.json', res.content[0].text)}` });
+        return res;
+      },
+    },
+    {
+      name: 'preview_frames',
+      description:
+        '按时间连续截取预览画面，分辨率是预览本身的（720×1280，官方截图是缩小后的 320×569）：默认先重置预览，再每隔 interval_ms 截一张，共 count 张（一次最多 24 张），用来看动态效果、摇头时的侧脸等。videos 可依次换几个预览视频各截一组（名称取自 list_preview_videos，如 preview_single_shake_head||女），全部截完切回原视频；切换会让工程变成「已修改」，之后需要 save_project。crop 按画面比例（0–1）裁出局部，如脸部。每帧都存成文件并随结果返回，files 里是路径，可直接贴给用户看；默认存在临时目录、24 小时后删除，save_to（目录的绝对路径）则存到那里长期保留。每帧注明实际截取时刻（相对重置后的毫秒数）。',
+      shape: {
+        ...target,
+        count: z.number().int().min(1).max(12).optional().describe('每个视频截几张，默认 4。'),
+        interval_ms: z.number().int().min(100).max(10000).optional().describe('相邻两张的间隔（毫秒），默认 700。'),
+        videos: z.array(z.string().min(1)).min(1).max(MAX_FRAME_VIDEOS).optional().describe('依次使用的预览视频名称（list_preview_videos 返回的 video_name）；不给就用当前视频。'),
+        tracking_type: z.string().min(1).optional().describe('videos 所属的 tracking_type，如 face、body、hand，默认 face。'),
+        reset: z.boolean().optional().describe('每组截图前先重置预览，默认 true。'),
+        crop: z
+          .object({
+            x: z.number().min(0).max(1),
+            y: z.number().min(0).max(1),
+            width: z.number().gt(0).max(1),
+            height: z.number().gt(0).max(1),
+          })
+          .optional()
+          .describe('裁剪区域，按画面宽高的比例，左上角为 (0, 0)。'),
+        save_to: saveTo,
+      },
+      run: async (a) => {
+        const { count = 4, interval_ms = 700, videos, tracking_type = 'face', reset = true, crop, save_to } = a;
+        const total = count * (videos ? videos.length : 1);
+        if (total > MAX_FRAMES) throw Error(`TOO_MANY_FRAMES: ${total} frames asked, at most ${MAX_FRAMES} per call`);
+        const instance_id = await officialInstance(a);
+        const projectPath = await projects.resolveProjectPath({ instance_id });
+        const dir = save_to ? saveDir(save_to) : d.framesDir();
+        const frame = (name) => d.callPlugin('preview_frame', {}, { projectPath, timeoutMs: 15000 }).then((img) => ({ name, img }));
+        const shoot = async (prefix) => {
+          if (reset) {
+            const r = await d.official.callJson('interact_by_dsl', { instance_id, commands: [{ command_type: 'reset_preview', params: {} }], intention: '重置预览后连续截图' });
+            if (!r.success) throw Error(`RESET_PREVIEW_FAILED: ${JSON.stringify(r.results)}`);
+          }
+          const t0 = Date.now();
+          const shots = [];
+          for (let i = 0; i < count; i++) {
+            if (i) await d.sleep(Math.max(0, t0 + i * interval_ms - Date.now()));
+            const at = Date.now() - t0;
+            shots.push({ ...(await frame(`${prefix}frame-${i + 1}.jpg`)), at });
+          }
+          return shots;
+        };
+        const groups = [];
+        let original = null;
+        if (videos) {
+          original = await d.official.callJson('get_current_preview_video', { instance_id, intention: '记下当前预览视频，截图后切回' });
+          try {
+            for (const [k, video_name] of videos.entries()) {
+              await d.official.callJson('set_preview_video', { instance_id, tracking_type, video_name, intention: '临时切换预览视频截图' });
+              groups.push({ video: video_name, shots: await shoot(`v${k + 1}-`) });
+            }
+          } finally {
+            const back = original.video_name ? { video_name: original.video_name } : { resource_url: original.resource_url };
+            await d.official.callJson('set_preview_video', { instance_id, tracking_type: original.tracking_type, ...back, intention: '截图后切回原预览视频' });
+          }
+        } else {
+          groups.push({ video: null, shots: await shoot('') });
+        }
+        const files = [];
+        const content = [];
+        for (const g of groups) {
+          for (const [i, s] of g.shots.entries()) {
+            const file = path.join(dir, s.name);
+            fs.writeFileSync(file, Buffer.from(s.img.data, 'base64'));
+            if (crop) await d.cropImage(file, crop);
+            files.push(file);
+            content.push({ type: 'text', text: `${g.video ? `${g.video} ` : ''}第 ${i + 1} 帧（${s.at} ms）` });
+            content.push({ type: 'image', ...(await d.readImageFile(file)) });
+          }
+        }
+        const summary = {
+          frames: files.length,
+          files,
+          ...(save_to ? {} : { note_files: '临时文件，24 小时后删除；要留存请传 save_to' }),
+          ...(original ? { note: `预览视频已切回 ${original.video_name || original.resource_url}；切换过预览视频，工程变成了「已修改」，需要 save_project` } : {}),
+        };
+        return { content: [{ type: 'text', text: JSON.stringify(summary, null, 2) }, ...content] };
       },
     },
     {
