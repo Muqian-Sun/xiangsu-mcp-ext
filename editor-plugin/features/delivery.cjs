@@ -144,7 +144,7 @@ const methods = {
   // the Douyin app scans. The package is uploaded to Douyin's preview service.
   async mobilePreview() {
     this.ensureCompatible('mobile');
-    activeProject(this);
+    const project = activeProject(this);
     const helper = this.mod(M.mobilePreview);
     await helper.getCookie();
     this.mod(M.bizUtils).ExportEffectPackageUtils.registerSDKVersionMapping();
@@ -161,7 +161,7 @@ const methods = {
     const body = JSON.parse(res.body);
     if (body.code === MODERATION_FAILED) throw Error(`MOBILE_PREVIEW_MODERATION_FAILED: ${body.message || ''}`);
     if (body.code !== 0 || !body.data) throw Error(`MOBILE_PREVIEW_FAILED: code=${body.code} message=${body.message || ''}`);
-    return { qr_text: JSON.stringify(body.data), expires_in_sec: body.data.ttl ?? null, package_bytes: pkg.size };
+    return { project_path: project.path, qr_text: JSON.stringify(body.data), expires_in_sec: body.data.ttl ?? null, package_bytes: pkg.size };
   },
 };
 

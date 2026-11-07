@@ -9,6 +9,7 @@ import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { createServer } from '../src/server.mjs';
 import { prepareIcon, ICON_SIZE } from '../src/icons.mjs';
 import { sniffImage } from '../src/images.mjs';
+import { QrCodes } from '../src/qrcodes.mjs';
 
 const require = createRequire(import.meta.url);
 const { Library, M } = require('../editor-plugin/library.cjs');
@@ -265,9 +266,9 @@ test('submit_prepare opens the submit window through the toolbar entry only afte
 });
 
 test('mobile_preview exports like the toolbar popup and returns the QR text it would show', async () => {
-  const { lib, calls, instance } = setup();
+  const { lib, calls, instance, projectDir } = setup();
   const out = await lib.mobilePreview();
-  assert.deepEqual(out, { qr_text: JSON.stringify({ id: 'ENC', type: 'studio', ttl: 604800 }), expires_in_sec: 604800, package_bytes: 1000 });
+  assert.deepEqual(out, { project_path: projectDir, qr_text: JSON.stringify({ id: 'ENC', type: 'studio', ttl: 604800 }), expires_in_sec: 604800, package_bytes: 1000 });
   assert.equal(calls.sdkMapping, 1);
   assert.deepEqual(calls.exportOpts[0], { exportName: 'effect', zip: true });
   assert.equal(calls.uploaded.length, 1);
@@ -383,21 +384,72 @@ test('effect_check makes the single cloud check call, with an RPC timeout longer
   assert.equal(old.isError, true);
 });
 
-test('mobile_preview returns the QR image of the text the editor would encode', async () => {
+test('mobile_preview returns the QR image of the text the editor would encode and keeps it as a file until it expires', async () => {
   const qr = [];
+  const timers = [];
+  const PNG = Buffer.from('89504e470d0a1a0a00', 'hex');
+  const T = Date.UTC(2026, 10, 7, 6, 0, 0);
+  let now = T;
+  const qrCodes = new QrCodes({ stateDir: tmpdir('xs-qr-'), now: () => now });
   const client = await connect({
-    callPlugin: async () => ({ qr_text: '{"id":"ENC"}', expires_in_sec: 604800, package_bytes: 5 }),
-    qrPng: async (t) => (qr.push(t), Buffer.from('89504e470d0a1a0a00', 'hex')),
+    callPlugin: async () => ({ project_path: '/proj/韩系心动', qr_text: '{"id":"ENC"}', expires_in_sec: 60, package_bytes: 5 }),
+    qrPng: async (t) => (qr.push(t), PNG),
+    qrCodes,
+    schedule: (fn, ms) => timers.push({ fn, ms }),
   });
+  fs.mkdirSync(qrCodes.dir, { recursive: true });
+  fs.writeFileSync(path.join(qrCodes.dir, `${T - 1}-旧工程.png`), 'old');
   const res = await client.callTool({ name: 'mobile_preview', arguments: {} });
-  assert.equal(json(res).expires_in_sec, 604800);
+  const out = json(res);
+  assert.equal(out.expires_in_sec, 60);
+  assert.equal(out.expires_at, new Date(T + 60000).toISOString());
+  assert.equal(out.qr_file, path.join(qrCodes.dir, `${T + 60000}-韩系心动.png`));
+  assert.deepEqual(fs.readFileSync(out.qr_file), PNG);
+  assert.deepEqual(fs.readdirSync(qrCodes.dir), [path.basename(out.qr_file)], 'an expired code goes when a new one is made');
   assert.equal(res.content[1].type, 'image');
   assert.equal(res.content[1].mimeType, 'image/png');
   assert.deepEqual(qr, ['{"id":"ENC"}']);
+  assert.deepEqual(timers.map((t) => t.ms), [61000]);
+  now = T + 59999;
+  timers[0].fn();
+  assert.equal(fs.existsSync(out.qr_file), true, 'kept until it expires');
+  now = T + 60000;
+  timers[0].fn();
+  assert.equal(fs.existsSync(out.qr_file), false);
+});
+
+test('mobile_preview falls back to a week when the answer carries no ttl', async () => {
+  const T = Date.UTC(2026, 10, 7, 6, 0, 0);
+  const qrCodes = new QrCodes({ stateDir: tmpdir('xs-qr-'), now: () => T });
+  const timers = [];
+  const client = await connect({
+    callPlugin: async () => ({ project_path: '/proj/A', qr_text: '{"id":"ENC"}', expires_in_sec: null, package_bytes: 5 }),
+    qrPng: async () => Buffer.from('89504e470d0a1a0a00', 'hex'),
+    qrCodes,
+    schedule: (fn, ms) => timers.push(ms),
+  });
+  const out = json(await client.callTool({ name: 'mobile_preview', arguments: {} }));
+  assert.equal(out.expires_at, new Date(T + 604800000).toISOString());
+  assert.equal(path.basename(out.qr_file), `${T + 604800000}-A.png`);
+  assert.deepEqual(timers, [604801000]);
+});
+
+test('the server deletes expired QR codes when it starts and leaves other files alone', async () => {
+  const T = Date.UTC(2026, 10, 7, 6, 0, 0);
+  const qrCodes = new QrCodes({ stateDir: tmpdir('xs-qr-'), now: () => T });
+  fs.mkdirSync(qrCodes.dir, { recursive: true });
+  for (const name of [`${T}-过期.png`, `${T - 5}-更早.png`, `${T + 1}-有效.png`, 'notes.txt', 'abc-x.png']) fs.writeFileSync(path.join(qrCodes.dir, name), 'x');
+  await connect({ callPlugin: async () => ({}), qrCodes });
+  assert.deepEqual(fs.readdirSync(qrCodes.dir).sort(), [`${T + 1}-有效.png`, 'abc-x.png', 'notes.txt'].sort());
+  assert.deepEqual(new QrCodes({ stateDir: tmpdir('xs-qr-none-') }).prune(), []);
 });
 
 test('the real QR helper renders a PNG', async () => {
-  const client = await connect({ callPlugin: async () => ({ qr_text: '{"id":"ENC","type":"studio","ttl":604800}', expires_in_sec: 604800, package_bytes: 5 }) });
+  const client = await connect({
+    callPlugin: async () => ({ project_path: '/proj/A', qr_text: '{"id":"ENC","type":"studio","ttl":604800}', expires_in_sec: 604800, package_bytes: 5 }),
+    qrCodes: new QrCodes({ stateDir: tmpdir('xs-qr-') }),
+    schedule: () => {},
+  });
   const res = await client.callTool({ name: 'mobile_preview', arguments: {} });
   assert.equal(sniffImage(Buffer.from(res.content[1].data, 'base64')), 'image/png');
 });
