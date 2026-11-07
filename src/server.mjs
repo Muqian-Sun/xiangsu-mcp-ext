@@ -654,7 +654,7 @@ export function createServer(deps = {}) {
     {
       name: 'scene_tree',
       description:
-        '把场景结构输出成紧凑的缩进文本：渲染组，以及每个对象的 guid、名称、是否隐藏、组件类型。比 get_scene 的 JSON 好读，适合先摸清结构再用 inspect_many 查参数。subtree 只看某个对象（guid 或名称），depth 控制展开层数（默认 6）；没展开的子对象会注明数量。传 project_dir（工程目录，如 works_download 下载的作品）时不需要打开窗口，直接读 Assets/main.scene，对象写成 #序号，组件类型是场景文件里的名称（脚本写成 JSScriptComponent(脚本路径)），可能和窗口里显示的不同。save_to 是目录的绝对路径，结果另存为其中的 scene_tree.txt，长期保留。',
+        '把场景结构输出成紧凑的缩进文本：渲染组，以及每个对象的 guid、名称、是否隐藏、组件类型。比 get_scene 的 JSON 好读，适合先摸清结构再用 inspect_many 查参数。subtree 只看某个对象（guid 或名称），depth 控制展开层数（默认 6）；没展开的子对象会注明数量。传 project_dir（工程目录，如 works_download 下载的作品）时不需要打开窗口，直接读 Assets/main.scene 和 main.scene.extra，对象写成 #序号，组件类型和窗口里显示的一致（编辑器数据缺失时退回场景文件里的名称）；没有渲染组这一层，渲染组本身作为根对象列出。save_to 是目录的绝对路径，结果另存为其中的 scene_tree.txt，长期保留。',
       shape: {
         ...target,
         project_dir: z.string().min(1).optional().describe('不开窗口、直接读这个工程目录的场景文件；给了它就不看 project_path / instance_id。'),
@@ -682,7 +682,7 @@ export function createServer(deps = {}) {
     {
       name: 'inspect_many',
       description:
-        '一次查看多个对象的组件参数（逐个调用官方 inspect），值里的 {type, data} 包装直接展开成值，超长数组只给长度和前几项；绑定的资源写成 {resource, type, file}，引用的对象写成 {object, name}。component_types 只留某些组件（如 ["Transform"]），fields 只留属性名包含这些片段的属性（不分大小写，如 ["intensity", "position"]）。preset="key" 自动留下通常决定效果的参数：位置/缩放/旋转、显隐与启用、强度/不透明度/权重/颜色类属性、文字内容（str）与 2D 尺寸（sizeDelta）、绑定的资源，以及场景文件里脚本组件的全部参数（这份清单是按已做过的妆容、形变、贴纸、文字效果拍的，缺的用 fields 补，可与 fields 同时用）。传 project_dir 时不开窗口、直接读场景文件，guids 用 scene_tree 给出的 #序号。单个对象失败只在该项写明原因。save_to 是目录的绝对路径，结果另存为其中的 inspect_many.json，长期保留。',
+        '一次查看多个对象的组件参数（逐个调用官方 inspect），值里的 {type, data} 包装直接展开成值，超长数组只给长度和前几项；绑定的资源写成 {resource, type, file}，引用的对象写成 {object, name}。component_types 只留某些组件（如 ["Transform"]），fields 只留属性名包含这些片段的属性（不分大小写，如 ["intensity", "position"]）。preset="key" 自动留下通常决定效果的参数：位置/缩放/旋转、显隐与启用、强度/不透明度/权重/颜色类属性、文字内容（str）与 2D 尺寸（sizeDelta）、绑定的资源，以及场景文件里脚本组件的全部参数（这份清单是按已做过的妆容、形变、贴纸、文字效果拍的，缺的用 fields 补，可与 fields 同时用）。传 project_dir 时不开窗口、直接读场景文件（含编辑器面板里的参数，如妆容的贴图和强度），guids 用 scene_tree 给出的 #序号；内置资源写成 {builtin: id}，组件运行时生成、工程里没有文件的资源写成 {path}。单个对象失败只在该项写明原因。save_to 是目录的绝对路径，结果另存为其中的 inspect_many.json，长期保留。',
       shape: {
         ...target,
         project_dir: z.string().min(1).optional().describe('不开窗口、直接读这个工程目录的场景文件；给了它就不看 project_path / instance_id。'),

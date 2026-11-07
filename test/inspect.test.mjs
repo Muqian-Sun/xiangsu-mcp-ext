@@ -252,10 +252,20 @@ guid: {a: 23, b: 24}
 canvasEnabled: false
 `;
 
-function sceneProject({ badExtra = false } = {}) {
+// main.scene.extra: the editor's side of components, keyed by the runtime guid.
+const EDITOR_EXTRA = [
+  { guid: { a: 'a82b9486-0bfd-3638-532d-fc233b7c55ac', b: '' }, objGuid: 'Guid(7875085725817850609, 329766013828765107)', extraType: 'SceneEditor', rttiType: 'Scene' },
+  { guid: { a: 'c1' }, objGuid: 'Guid(1, 2)', extraType: 'Camera', name: '摄像机', version: '0.4.0', editable: true, extendedInfo: {}, fov: 45, maskTexture: '00000000-0000-0000-0000-000000000802', follow: 'Guid(3, 4)', note: 'Guid(99, 99)' },
+  { guid: { a: 'c2' }, objGuid: 'Guid(15, 16)', extraType: 'Text2D', name: '文字', font: 'f6cfe326-8fb2-fda2-db1b-b375897821cb', label: 'f6cfe326-8fb2-fda2-db1b-b375897821cb 不是资源' },
+  { guid: { a: 'c3' }, objGuid: 'Guid(25, 26)', extraType: 'UserComponentEditor', rttiType: 'DadNameReveal', name: 'DadNameReveal' },
+  { guid: { a: 'c4' }, objGuid: 'Guid(17, 18)', extraType: 'Transform', eulerAngle: [0, 90, 0] },
+];
+
+function sceneProject({ badExtra = false, badEditor = false } = {}) {
   const dir = tmpdir('xs-scene-');
   fs.mkdirSync(path.join(dir, 'Assets', 'sub'), { recursive: true });
   fs.writeFileSync(path.join(dir, 'Assets', 'main.scene'), SCENE_FILE);
+  fs.writeFileSync(path.join(dir, 'Assets', 'main.scene.extra'), badEditor ? '[' : JSON.stringify(EDITOR_EXTRA));
   fs.writeFileSync(path.join(dir, 'Assets', '遮罩.omtl.extra'), JSON.stringify([{ guid: { a: 'f6cfe326-8fb2-fda2-db1b-b375897821cb', b: '' }, name: '遮罩', rttiType: 'Material' }]));
   fs.writeFileSync(path.join(dir, 'Assets', 'sub', 'DadNameReveal.ts.extra'), JSON.stringify([{ guid: { a: 'f0498c0f-0b89-5b9c-7c7a-e998afe0e17f', b: '' }, name: 'DadNameReveal', extraType: 'ResItemJSScript' }]));
   fs.writeFileSync(path.join(dir, 'Assets', 'sub', '头模.headJSA.extra'), JSON.stringify([{ guid: { a: 'd6d54979-e383-0055-6556-aef771b95493' }, uuid: '12135DB8-0120-bdea-e094-955d52822c02', name: '头模', rttiType: 'Mesh' }]));
@@ -267,10 +277,10 @@ test('loadScene reads main.scene into the get_scene tree shape, with the transfo
   const scene = loadScene(sceneProject());
   assert.equal(
     formatObjects(scene.tree({ depth: 6 })),
-    ['#1 组  [Transform, Camera]', '  #2 头 (隐藏)  [Transform, MeshRenderer, JSScriptComponent(sadface/sadface.js)]', '  #3 字  [ScreenTransform, FaceBinding, Text, DadNameReveal]'].join('\n'),
+    ['#1 组  [Transform, Camera]', '  #2 头 (隐藏)  [Transform, MeshRenderer, JSScriptComponent(sadface/sadface.js)]', '  #3 字  [ScreenTransform, FaceBinding, Text2D, DadNameReveal]'].join('\n'),
   );
   assert.equal(formatObjects(scene.tree({ depth: 1 })), '#1 组  [Transform, Camera]\n  … 还有 2 个子对象未展开（加大 depth 或用 subtree 查看）');
-  assert.equal(formatObjects(scene.tree({ subtree: '字', depth: 6 })), '#3 字  [ScreenTransform, FaceBinding, Text, DadNameReveal]');
+  assert.equal(formatObjects(scene.tree({ subtree: '字', depth: 6 })), '#3 字  [ScreenTransform, FaceBinding, Text2D, DadNameReveal]');
   assert.throws(() => scene.tree({ subtree: '#9', depth: 6 }), /SUBTREE_NOT_FOUND: #9 matches 0/);
   assert.deepEqual(scene.unreadable, []);
 });
@@ -293,11 +303,19 @@ test('loadScene inspect gives values, resources, references and script parameter
     type: 'PERSPECTIVE',
     renderTexture: { builtin: '00000000-0000-0000-0000-0000000000l3' },
     inputTexture: { builtin: 'share://input.texture' },
+    fov: 45,
+    maskTexture: { builtin: '00000000-0000-0000-0000-000000000802' },
+    follow: { object: '#2', name: '头' },
+    note: 'Guid(99, 99)',
   });
-  assert.deepEqual(group.components[0].properties.localPosition, { x: 0, y: 2, z: 40 });
+  assert.deepEqual(group.components[0].properties, { enabled: true, localPosition: { x: 0, y: 2, z: 40 }, eulerAngle: [0, 90, 0] });
   const text = scene.inspect('#3');
   assert.deepEqual(text.components[1], { type: 'FaceBinding', guid: '#3.2', properties: { enabled: true, faceIndex: 1 } });
-  assert.deepEqual(text.components[2].properties, { canvas: { TextCanvas: { canvasEnabled: false } } });
+  assert.deepEqual(text.components[2], {
+    type: 'Text2D',
+    guid: '#3.3',
+    properties: { canvas: { TextCanvas: { canvasEnabled: false } }, font: { resource: '遮罩', type: 'Material', file: '遮罩.omtl' }, label: 'f6cfe326-8fb2-fda2-db1b-b375897821cb 不是资源' },
+  });
   assert.equal(text.components[1].script, undefined);
   assert.deepEqual(text.components[3], { type: 'DadNameReveal', guid: '#3.4', script: true, properties: { enabled: true, tauntTemplate: '同学：{name}是谁呀？' } });
   assert.throws(() => scene.inspect('s1'), /OBJECT_NOT_FOUND: s1/);
@@ -307,6 +325,9 @@ test('loadScene fails closed on a missing or malformed scene and reports unreada
   assert.throws(() => loadScene(tmpdir('xs-empty-')), /NO_MAIN_SCENE/);
   const dir = sceneProject({ badExtra: true });
   assert.match(loadScene(dir).unreadable.join(), /broken\.png\.extra/);
+  const noEditor = loadScene(sceneProject({ badEditor: true }));
+  assert.match(noEditor.unreadable.join(), /^main\.scene\.extra: /);
+  assert.equal(noEditor.inspect('#3').components[2].type, 'Text');
   fs.writeFileSync(path.join(dir, 'Assets', 'main.scene'), SCENE_FILE + '--- !Transform\nname: x\n');
   assert.throws(() => loadScene(dir), /SCENE_PARSE_FAILED: .*without a unique anchor/);
   fs.writeFileSync(path.join(dir, 'Assets', 'main.scene'), SCENE_FILE + '--- !Transform &9\nname: [\n');

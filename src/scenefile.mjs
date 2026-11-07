@@ -1,6 +1,9 @@
 // Reads a project's Assets/main.scene without an editor window (a downloaded work, a closed project),
 // into the same shapes the official get_scene / inspect return, so scene_tree and inspect_many format
 // both the same way. Objects are addressed as #<n>, their order in the scene file.
+// main.scene holds the runtime components; main.scene.extra holds the editor's side of each one
+// (matched by objGuid): the component name the editor shows (FaceMask, GanComponent) and the
+// parameters its inspector edits (a makeup's texture and intensity).
 import fs from 'node:fs';
 import path from 'node:path';
 import YAML from 'yaml';
@@ -21,10 +24,11 @@ function walk(dir, out = []) {
 
 // Every asset's .extra lists the resources it holds; scene references point at them by uuid
 // (`guid.a`, or `uuid` for generated ones such as the head-fitting mesh).
-export function resourceIndex(assetsDir) {
+export function resourceIndex(assetsDir, skip = new Set()) {
   const index = new Map();
   const unreadable = [];
   for (const file of walk(assetsDir)) {
+    if (skip.has(file)) continue;
     let entries;
     try {
       entries = JSON.parse(fs.readFileSync(file, 'utf8'));
@@ -42,6 +46,12 @@ export function resourceIndex(assetsDir) {
 }
 
 const lid = (ref) => Number(ref.localId);
+const guidKey = (g) => g && g.a !== undefined && `Guid(${g.a}, ${g.b})`;
+const GUID_STRING = /^Guid\(\d+, \d+\)$/;
+// Bookkeeping fields of a main.scene.extra entry, not component parameters.
+const EDITOR_META = ['guid', 'objGuid', 'extraType', 'rttiType', 'name', 'version', 'editable', '_lazyUpgrateVersion', 'extendedInfo'];
+// The editor entry of a project script; its rttiType is the script's name.
+const USER_SCRIPT = 'UserComponentEditor';
 const isRef = (v) => v && typeof v === 'object' && !Array.isArray(v) && 'localId' in v && Object.keys(v).every((k) => k === 'localId' || k === 'path');
 
 function parseDocs(file) {
@@ -64,13 +74,32 @@ export function loadScene(projectDir) {
   const byId = parseDocs(file);
   const scene = byId.get(1);
   if (scene?.tag !== 'Scene' || !Array.isArray(scene.value.entities)) throw Error(`SCENE_PARSE_FAILED: ${file}: document &1 is not the Scene`);
-  const { index, unreadable } = resourceIndex(assets);
+  const editorFile = `${file}.extra`;
+  const { index, unreadable } = resourceIndex(assets, new Set([editorFile]));
+  const editor = new Map();
+  if (fs.existsSync(editorFile)) {
+    try {
+      for (const e of JSON.parse(fs.readFileSync(editorFile, 'utf8'))) if (e.objGuid) editor.set(e.objGuid, e);
+    } catch (e) {
+      unreadable.push(`main.scene.extra: ${e.message}`);
+    }
+  }
   const entities = scene.value.entities.map((e, i) => ({ id: `#${i + 1}`, raw: e }));
   const byTransform = new Map();
   for (const e of entities) {
     const ref = (e.raw.components || []).find((c) => isRef(c) && /Transform$/.test(byId.get(lid(c))?.tag || ''));
     e.transform = ref ? byId.get(lid(ref)).value : null;
     if (ref) byTransform.set(lid(ref), e);
+  }
+
+  const rawOf = (c) => (isRef(c) ? byId.get(lid(c))?.value || {} : c);
+  const editorOf = (c) => editor.get(guidKey(rawOf(c).guid));
+  // Editor parameters point at objects by their Guid(a, b) string: an entity or one of its components.
+  const owners = new Map();
+  for (const e of entities) {
+    const who = { object: e.id, name: e.raw.name };
+    owners.set(guidKey(e.raw.guid), who);
+    for (const c of e.raw.components || []) owners.set(guidKey(rawOf(c).guid), who);
   }
 
   const resource = (p) => {
@@ -85,6 +114,9 @@ export function loadScene(projectDir) {
     // Scene floats are float32 written out as doubles (0.300000011920929); 7 significant digits is
     // what a float32 holds.
     if (typeof v === 'number' && !Number.isInteger(v)) return Number(v.toPrecision(7));
+    // Editor parameters name resources by bare uuid and objects by Guid(a, b).
+    if (typeof v === 'string' && GUID_STRING.test(v)) return owners.get(v) || v;
+    if (typeof v === 'string' && (index.has(v.toLowerCase()) || BUILTIN.test(v))) return resource(v);
     if (Array.isArray(v)) return v.map((x) => value(x, seen));
     if (!v || typeof v !== 'object') return v;
     if (isRef(v)) {
@@ -101,8 +133,10 @@ export function loadScene(projectDir) {
   };
   // A project script (DadNameReveal.ts) is a DynamicComponent whose className is the script asset's uuid.
   const scriptAsset = (c) => c.__class === 'DynamicComponent' && typeof c.className === 'string' && UUID.test(c.className);
-  const isScript = (c) => !isRef(c) && (c.__class === 'JSScriptComponent' || scriptAsset(c));
+  const isScript = (c) => !isRef(c) && (c.__class === 'JSScriptComponent' || scriptAsset(c) || editorOf(c)?.extraType === USER_SCRIPT);
   const typeOf = (c) => {
+    const ed = editorOf(c);
+    if (ed?.extraType) return ed.extraType === USER_SCRIPT ? ed.rttiType || ed.name : ed.extraType;
     if (isRef(c)) return byId.get(lid(c))?.tag || 'Unknown';
     if (scriptAsset(c)) return index.get(c.className.toLowerCase())?.resource || c.className;
     if (c.__class === 'DynamicComponent' && c.className) return c.className;
@@ -111,12 +145,15 @@ export function loadScene(projectDir) {
   };
   // Script parameters sit under `properties` (JSScriptComponent) or serializedProperty.properties
   // (built-in JS components such as FaceBinding, Text); inspect shows them as the component's own.
+  // Editor parameters come last: where both sides have one, the editor's is what the inspector shows.
   const props = (c) => {
-    const raw = isRef(c) ? byId.get(lid(c))?.value || {} : c;
+    const raw = rawOf(c);
     const { serializedProperty, properties, ...rest } = raw;
     const merged = { ...rest, ...serializedProperty?.properties };
     if (raw.__class === 'JSScriptComponent') Object.assign(merged, properties);
     else if (properties !== undefined) merged.properties = properties;
+    const ed = editorOf(c);
+    if (ed) for (const [k, v] of Object.entries(ed)) if (!EDITOR_META.includes(k)) merged[k] = v;
     const { name, __class, className, parent, children, ...kept } = merged;
     return value(kept, new Set());
   };
